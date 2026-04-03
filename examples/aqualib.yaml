@@ -1,0 +1,26 @@
+# Directory layout
+directories:
+  base: ./aqualib_workspace
+  work: work
+  results: results
+  data: data
+
+# LLM configuration (OpenAI-compatible)
+llm:
+  # api_key: ""           # or set OPENAI_API_KEY env var
+  # base_url: null        # set for custom / self-hosted endpoints
+  model: gpt-4o
+  temperature: 0.2
+  max_tokens: 4096
+
+# RAG pipeline
+rag:
+  chunk_size: 512
+  chunk_overlap: 64
+  similarity_top_k: 5
+  embed_model: text-embedding-3-small
+
+# Always prefer Clawbio skills over generic alternatives
+clawbio_priority: true
+
+verbose: false
