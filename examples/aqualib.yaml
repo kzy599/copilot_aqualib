@@ -4,6 +4,8 @@ directories:
   work: work
   results: results
   data: data
+  skills_clawbio: skills/clawbio       # Mount point for external Clawbio library
+  clawbio_traces: results/clawbio_traces  # Clawbio invocation trace logs
 
 # LLM configuration (OpenAI-compatible)
 llm:

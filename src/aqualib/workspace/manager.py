@@ -5,7 +5,10 @@ Creates and maintains the canonical directory layout:
     <base>/
     ├── work/                   # scratch / intermediate files
     ├── data/                   # input data & RAG corpus
+    ├── skills/
+    │   └── clawbio/            # mount point for external Clawbio library
     └── results/
+        ├── clawbio_traces/     # standardised logs of every Clawbio invocation
         └── <task_id>/
             ├── audit_report.json
             ├── audit_report.md
@@ -19,10 +22,11 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aqualib.config import Settings
-from aqualib.core.message import AuditReport, Task
+from aqualib.core.message import AuditReport, SkillInvocation, Task
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,13 @@ class WorkspaceManager:
     # ------------------------------------------------------------------
 
     def _ensure_dirs(self) -> None:
-        for d in (self.dirs.work, self.dirs.results, self.dirs.data):
+        for d in (
+            self.dirs.work,
+            self.dirs.results,
+            self.dirs.data,
+            self.dirs.skills_clawbio,
+            self.dirs.clawbio_traces,
+        ):
             d.mkdir(parents=True, exist_ok=True)
         logger.info("Workspace ready at %s", self.dirs.base)
 
@@ -57,6 +67,53 @@ class WorkspaceManager:
         p = self.skills_dir(task_id) / invocation_id
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    # ------------------------------------------------------------------
+    # Clawbio trace logging
+    # ------------------------------------------------------------------
+
+    def save_clawbio_trace(self, task_id: str, invocation: SkillInvocation) -> Path:
+        """Write a standardised trace record for a Clawbio skill invocation.
+
+        Every Clawbio execution gets a JSON file under
+        ``results/clawbio_traces/<task_id>_<invocation_id>.json``
+        so the Reviewer (and humans) can easily inspect the trail.
+        """
+        trace_dir = self.dirs.clawbio_traces
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{task_id}_{invocation.invocation_id}.json"
+        trace_path = trace_dir / filename
+        trace_data = {
+            "task_id": task_id,
+            "invocation_id": invocation.invocation_id,
+            "skill_name": invocation.skill_name,
+            "source": invocation.source.value,
+            "parameters": invocation.parameters,
+            "output": invocation.output,
+            "output_dir": invocation.output_dir,
+            "success": invocation.success,
+            "error": invocation.error,
+            "started_at": invocation.started_at.isoformat(),
+            "finished_at": invocation.finished_at.isoformat() if invocation.finished_at else None,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        trace_path.write_text(json.dumps(trace_data, indent=2))
+        logger.info("Clawbio trace saved → %s", trace_path)
+        return trace_path
+
+    def list_clawbio_traces(self, task_id: str | None = None) -> list[dict]:
+        """List Clawbio trace files, optionally filtered by task_id."""
+        trace_dir = self.dirs.clawbio_traces
+        if not trace_dir.exists():
+            return []
+        results = []
+        for f in sorted(trace_dir.iterdir()):
+            if not f.is_file() or not f.suffix == ".json":
+                continue
+            if task_id and not f.name.startswith(f"{task_id}_"):
+                continue
+            results.append(json.loads(f.read_text()))
+        return results
 
     # ------------------------------------------------------------------
     # Persistence

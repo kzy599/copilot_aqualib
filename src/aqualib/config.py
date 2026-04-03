@@ -21,12 +21,20 @@ _DEFAULT_BASE = Path.cwd() / "aqualib_workspace"
 
 
 class DirectorySettings(BaseModel):
-    """Strict separation of work / results / data directories."""
+    """Strict separation of work / results / data / skills directories."""
 
     base: Path = Field(default_factory=lambda: _DEFAULT_BASE)
     work: Path = Field(default=Path("work"), description="Intermediate / scratch files")
     results: Path = Field(default=Path("results"), description="Final outputs & audit reports")
     data: Path = Field(default=Path("data"), description="Input data & RAG corpus")
+    skills_clawbio: Path = Field(
+        default=Path("skills/clawbio"),
+        description="Mount point for the external Clawbio skill library.",
+    )
+    clawbio_traces: Path = Field(
+        default=Path("results/clawbio_traces"),
+        description="Dedicated trace logs for every Clawbio skill invocation.",
+    )
 
     def resolve(self) -> "DirectorySettings":
         """Return a copy with all paths resolved relative to *base*."""
@@ -35,6 +43,8 @@ class DirectorySettings(BaseModel):
             work=(self.base / self.work).resolve(),
             results=(self.base / self.results).resolve(),
             data=(self.base / self.data).resolve(),
+            skills_clawbio=(self.base / self.skills_clawbio).resolve(),
+            clawbio_traces=(self.base / self.clawbio_traces).resolve(),
         )
 
 

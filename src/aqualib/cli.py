@@ -197,9 +197,16 @@ def init(
         rprint(f"[green]✅ Config written → {cfg_path}[/green]")
 
     rprint(f"[green]✅ Workspace initialised at {settings.directories.base}[/green]")
-    rprint(f"   work/    → {settings.directories.work}")
-    rprint(f"   results/ → {settings.directories.results}")
-    rprint(f"   data/    → {settings.directories.data}")
+    rprint(f"   work/              → {settings.directories.work}")
+    rprint(f"   results/           → {settings.directories.results}")
+    rprint(f"   data/              → {settings.directories.data}")
+    rprint(f"   skills/clawbio/    → {settings.directories.skills_clawbio}")
+    rprint(f"   clawbio_traces/    → {settings.directories.clawbio_traces}")
+    rprint()
+    rprint(
+        "[dim]Drop your Clawbio skill library into [bold]skills/clawbio/[/bold] – "
+        "it will be auto-discovered at runtime.[/dim]"
+    )
 
 
 # ---------------------------------------------------------------------------

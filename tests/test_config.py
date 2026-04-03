@@ -19,6 +19,8 @@ def test_directory_resolve(tmp_path: Path):
     assert dirs.work == (tmp_path / "work").resolve()
     assert dirs.results == (tmp_path / "results").resolve()
     assert dirs.data == (tmp_path / "data").resolve()
+    assert dirs.skills_clawbio == (tmp_path / "skills" / "clawbio").resolve()
+    assert dirs.clawbio_traces == (tmp_path / "results" / "clawbio_traces").resolve()
 
 
 def test_env_override(tmp_path: Path, monkeypatch):

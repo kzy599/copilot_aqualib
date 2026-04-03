@@ -132,4 +132,8 @@ class ExecutorAgent(BaseAgent):
         finally:
             inv.finished_at = datetime.now(timezone.utc)
 
+        # Write Clawbio trace for auditability
+        if inv.source == SkillSource.CLAWBIO:
+            self.workspace.save_clawbio_trace(task.task_id, inv)
+
         return inv
