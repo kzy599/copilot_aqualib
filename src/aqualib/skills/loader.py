@@ -38,8 +38,11 @@ def scan_clawbio_directory(directory: Path) -> list[BaseSkill]:
     list is returned – this is intentional so the framework degrades
     gracefully when no external Clawbio library is mounted.
     """
-    if not directory.is_dir():
+    if not directory.exists():
         logger.info("Clawbio mount point %s does not exist – skipping scan.", directory)
+        return []
+    if not directory.is_dir():
+        logger.warning("Clawbio mount point %s exists but is not a directory – skipping scan.", directory)
         return []
 
     skills: list[BaseSkill] = []
