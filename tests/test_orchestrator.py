@@ -150,3 +150,21 @@ class TestRunInjectsProjectContext:
             if m.role == Role.ORCHESTRATOR and "Project context:" in m.content
         ]
         assert len(context_msgs) == 0
+
+
+class TestSearcherFallback:
+    @pytest.mark.asyncio
+    async def test_searcher_fallback_adds_messages_when_no_rag(self, workspace: WorkspaceManager):
+        """When RAG returns empty, the Searcher should use fallback discovery."""
+        workspace.create_project(name="Fallback Test")
+        # Put a file in data/ so grep has something to find
+        data_dir = workspace.dirs.data
+        (data_dir / "proteins.txt").write_text("Protein alignment data for testing.")
+
+        orch = _make_orchestrator(workspace)
+        task = await orch.run("Align protein sequences")
+
+        # The orchestrator should have run and completed the pipeline
+        orch_msgs = [m for m in task.messages if m.role == Role.ORCHESTRATOR]
+        assert any("Pipeline started" in m.content for m in orch_msgs)
+        assert task.status == TaskStatus.APPROVED

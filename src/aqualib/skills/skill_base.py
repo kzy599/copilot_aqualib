@@ -26,7 +26,7 @@ class SkillMeta(BaseModel):
 
 
 class BaseSkill(abc.ABC):
-    """All skills – including Clawbio skills – implement this interface."""
+    """All skills – including vendor skills – implement this interface."""
 
     meta: SkillMeta  # subclass MUST set this
 

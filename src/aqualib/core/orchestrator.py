@@ -21,7 +21,7 @@ class Orchestrator:
 
     1. **Searcher** – retrieve context (RAG + progressive disclosure).
     2. **Executor** – plan & invoke skills.
-    3. **Reviewer** – audit results (Clawbio priority check).
+    3. **Reviewer** – audit results (vendor priority check).
 
     If the reviewer requests revision (up to ``max_retries``), the executor
     re-runs with feedback.

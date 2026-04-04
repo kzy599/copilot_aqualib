@@ -81,7 +81,7 @@ async def build_orchestrator(
     retriever = Retriever(indexer.index, top_k=settings.rag.similarity_top_k)
 
     # Agents
-    searcher = SearcherAgent(settings, retriever)
+    searcher = SearcherAgent(settings, retriever, registry=registry, workspace=workspace)
     executor = ExecutorAgent(settings, registry, workspace)
     reviewer = ReviewerAgent(settings, registry, workspace)
 
