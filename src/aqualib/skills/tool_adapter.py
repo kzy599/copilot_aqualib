@@ -220,7 +220,19 @@ async def _run_vendor_skill(
         stderr=asyncio.subprocess.PIPE,
         cwd=str(meta.vendor_root),
     )
-    stdout, stderr = await proc.communicate()
+    _VENDOR_TIMEOUT = 300  # seconds
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        workspace.save_sdk_vendor_trace(
+            meta.name,
+            {"returncode": -1, "stdout": "", "stderr": f"Timeout after {_VENDOR_TIMEOUT}s"},
+            session_slug=session_slug,
+        )
+        return f"ERROR: Vendor skill '{meta.name}' timed out after {_VENDOR_TIMEOUT}s."
 
     workspace.save_sdk_vendor_trace(
         meta.name,

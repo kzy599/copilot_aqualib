@@ -14,7 +14,10 @@ Start with:
 
 from __future__ import annotations
 
-raise NotImplementedError(
-    "The REST API has not been migrated to the Copilot SDK pipeline yet. "
-    "Use the CLI: aqualib run '...'"
-)
+
+def serve() -> None:
+    """Start the AquaLib API server (not yet migrated to Copilot SDK)."""
+    raise NotImplementedError(
+        "The REST API has not been migrated to the Copilot SDK pipeline yet. "
+        "Use the CLI: aqualib run '...'"
+    )

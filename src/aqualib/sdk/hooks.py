@@ -178,12 +178,15 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
 
 
 def _make_error_hook(workspace: "WorkspaceManager"):
+    _vendor_retry_counts: dict[str, int] = {}
+    _MAX_VENDOR_RETRIES = 4
+
     async def on_error_occurred(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, str]:
         """Error handling strategy.
 
-        - Vendor skill failure → retry once
+        - Vendor skill failure → retry up to _MAX_VENDOR_RETRIES times
         - All other errors    → skip and let the agent try another approach
         """
         error_context = input_data.get("errorContext", "")
@@ -195,8 +198,19 @@ def _make_error_hook(workspace: "WorkspaceManager"):
             "error": str(error_msg)[:500],
         })
 
-        if "vendor_" in str(error_context):
-            return {"errorHandling": "retry"}
+        error_context_str = str(error_context)
+        if "vendor_" in error_context_str:
+            count = _vendor_retry_counts.get(error_context_str, 0) + 1
+            _vendor_retry_counts[error_context_str] = count
+            if count <= _MAX_VENDOR_RETRIES:
+                logger.info("Vendor error retry %d/%d for %s", count, _MAX_VENDOR_RETRIES, error_context_str)
+                return {"errorHandling": "retry"}
+            else:
+                logger.warning(
+                    "Vendor retries exhausted (%d) for %s – skipping.", _MAX_VENDOR_RETRIES, error_context_str
+                )
+                _vendor_retry_counts.pop(error_context_str, None)
+                return {"errorHandling": "skip"}
 
         return {"errorHandling": "skip"}
 

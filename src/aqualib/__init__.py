@@ -1,3 +1,3 @@
-"""AquaLib – Multi-agent framework with Clawbio skill priority and RAG-powered retrieval."""
+"""AquaLib – Multi-agent framework with vendor skill priority and RAG-powered retrieval."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

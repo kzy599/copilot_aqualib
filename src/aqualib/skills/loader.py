@@ -28,6 +28,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from aqualib.core.message import SkillSource
 from aqualib.skills.skill_base import BaseSkill, SkillMeta
 
@@ -59,26 +61,43 @@ def parse_skill_md(text: str) -> dict[str, Any]:
 
     fm_match = _FRONTMATTER_RE.match(text)
     if fm_match:
-        for line in fm_match.group(1).splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            key = key.strip().lower()
-            value = value.strip()
-            if key == "tags":
-                meta["tags"] = [t.strip() for t in value.split(",") if t.strip()]
-            elif key == "parameters":
-                # Try JSON first, fall back to raw string
-                try:
-                    meta["parameters"] = json.loads(value)
-                except (json.JSONDecodeError, TypeError):
-                    meta["parameters"] = value
-            else:
-                meta[key] = value
-        # Body after frontmatter
+        try:
+            parsed = yaml.safe_load(fm_match.group(1))
+            if isinstance(parsed, dict):
+                meta = {k.lower(): v for k, v in parsed.items() if v is not None}
+        except yaml.YAMLError:
+            logger.warning("Failed to parse SKILL.md frontmatter as YAML, falling back to line parser.")
+            # fallback to existing line-by-line parser
+            for line in fm_match.group(1).splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "tags":
+                    meta["tags"] = [t.strip() for t in value.split(",") if t.strip()]
+                elif key == "parameters":
+                    try:
+                        meta["parameters"] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        meta["parameters"] = value
+                else:
+                    meta[key] = value
+
+        # Normalize tags: SKILL.md convention is comma-separated string
+        if "tags" in meta and isinstance(meta["tags"], str):
+            meta["tags"] = [t.strip() for t in meta["tags"].split(",") if t.strip()]
+
+        # Normalize parameters: try JSON parse if string
+        if "parameters" in meta and isinstance(meta["parameters"], str):
+            try:
+                meta["parameters"] = json.loads(meta["parameters"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         body = text[fm_match.end():]
     else:
         body = text
@@ -152,7 +171,17 @@ class VendorCliSkill(BaseSkill):
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._vendor_root),
         )
-        stdout, stderr = await proc.communicate()
+
+        _VENDOR_TIMEOUT = 300  # seconds
+
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"Vendor CLI '{self.meta.name}' timed out after {_VENDOR_TIMEOUT}s"
+            )
 
         result: dict[str, Any] = {
             "skill": self.meta.name,
