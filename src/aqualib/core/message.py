@@ -115,7 +115,7 @@ class AuditReport(BaseModel):
     status: TaskStatus
     executor_summary: str = ""
     reviewer_verdict: str = ""
-    clawbio_priority_check: str = ""
+    clawbio_priority_check: str = ""  # Deprecated: kept for backward compat with existing reports
     vendor_priority_check: str = ""
     skill_invocations: list[SkillInvocation] = Field(default_factory=list)
     messages: list[Message] = Field(default_factory=list)

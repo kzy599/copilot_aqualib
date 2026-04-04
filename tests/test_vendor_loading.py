@@ -1,4 +1,4 @@
-"""Tests for the vendor/ClawBio directory loading and three-tier priority."""
+"""Tests for vendor directory loading and three-tier priority."""
 
 import textwrap
 from pathlib import Path

@@ -187,9 +187,9 @@ class VendorCliSkill(BaseSkill):
     def _resolve_entry_point(self) -> Path:
         """Locate the vendor CLI entry point in the library root."""
         candidates = [
-            self._vendor_root / "clawbio.py",
             self._vendor_root / "cli.py",
             self._vendor_root / "main.py",
+            self._vendor_root / "clawbio.py",  # legacy ClawBio compat
         ]
         for c in candidates:
             if c.is_file():

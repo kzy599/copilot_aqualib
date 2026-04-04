@@ -48,8 +48,8 @@ def vendor_dir(tmp_path: Path) -> Path:
         Runs a CLI-based alignment pipeline via the vendor entry point.
         """,
     )
-    # Also place a dummy clawbio.py entry point
-    (d / "clawbio.py").write_text("# stub entry point")
+    # Also place a dummy CLI entry point
+    (d / "cli.py").write_text("# stub entry point")
     return d
 
 
@@ -265,10 +265,10 @@ async def test_cli_skill_reads_json_output(vendor_dir: Path, tmp_path: Path):
 
 
 def test_cli_skill_entry_point_resolution(tmp_path: Path):
-    """Verify entry point resolution prefers clawbio.py."""
+    """Verify entry point resolution prefers cli.py."""
     d = tmp_path / "vendor_lib"
     d.mkdir()
-    (d / "clawbio.py").write_text("# entry")
+    (d / "cli.py").write_text("# entry")
 
     from aqualib.skills.skill_base import SkillMeta
 
@@ -277,4 +277,4 @@ def test_cli_skill_entry_point_resolution(tmp_path: Path):
         skill_dir=d,
         vendor_root=d,
     )
-    assert skill._resolve_entry_point() == d / "clawbio.py"
+    assert skill._resolve_entry_point() == d / "cli.py"
