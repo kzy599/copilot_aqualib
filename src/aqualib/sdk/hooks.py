@@ -179,7 +179,7 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
 
 def _make_error_hook(workspace: "WorkspaceManager"):
     _vendor_retry_counts: dict[str, int] = {}
-    _MAX_VENDOR_RETRIES = 4
+    _MAX_VENDOR_RETRIES = 2
 
     async def on_error_occurred(
         input_data: dict[str, Any], invocation: Any
