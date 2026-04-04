@@ -212,3 +212,42 @@ def test_update_project_after_task_no_project(workspace: WorkspaceManager):
     workspace.update_project_after_task(task)  # should not raise
     assert workspace.load_project() is None
     assert workspace.load_context_log() == []
+
+
+# ---------------------------------------------------------------------------
+# scan_data_files tests
+# ---------------------------------------------------------------------------
+
+
+class TestScanDataFiles:
+    def test_returns_empty_when_no_data(self, workspace: WorkspaceManager):
+        results = workspace.scan_data_files("protein alignment")
+        assert results == []
+
+    def test_finds_matching_file(self, workspace: WorkspaceManager):
+        data_dir = workspace.dirs.data
+        (data_dir / "proteins.txt").write_text("MVKLF is a protein sequence for alignment testing.")
+        results = workspace.scan_data_files("protein alignment")
+        assert len(results) == 1
+        assert results[0]["path"] == "proteins.txt"
+        assert "protein" in results[0]["matched_keywords"]
+
+    def test_ignores_short_keywords(self, workspace: WorkspaceManager):
+        data_dir = workspace.dirs.data
+        (data_dir / "test.txt").write_text("an is it")
+        results = workspace.scan_data_files("an is it")
+        assert results == []  # all keywords are ≤ 2 chars
+
+    def test_respects_max_files(self, workspace: WorkspaceManager):
+        data_dir = workspace.dirs.data
+        for i in range(20):
+            (data_dir / f"file_{i}.txt").write_text(f"protein data {i}")
+        results = workspace.scan_data_files("protein", max_files=3)
+        assert len(results) == 3
+
+    def test_sorts_by_keyword_count(self, workspace: WorkspaceManager):
+        data_dir = workspace.dirs.data
+        (data_dir / "low.txt").write_text("protein data")
+        (data_dir / "high.txt").write_text("protein alignment sequence data")
+        results = workspace.scan_data_files("protein alignment sequence")
+        assert results[0]["path"] == "high.txt"  # more keyword matches

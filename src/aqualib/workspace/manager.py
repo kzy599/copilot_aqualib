@@ -230,6 +230,72 @@ class WorkspaceManager:
         self.save_project(meta)
 
     # ------------------------------------------------------------------
+    # Data-file scanning (fallback when RAG is unavailable)
+    # ------------------------------------------------------------------
+
+    def scan_data_files(
+        self,
+        query: str,
+        *,
+        max_files: int = 10,
+        max_chars_per_file: int = 500,
+        extensions: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Grep-like scan of data/ files for query keywords.
+
+        Returns a list of dicts with file path and matching snippets.
+        This is the fallback when RAG is unavailable — much simpler than
+        vector search but gives the Searcher basic file awareness.
+        """
+        if extensions is None:
+            extensions = {".txt", ".md", ".json", ".csv", ".yaml", ".yml"}
+
+        data_dir = self.dirs.data
+        if not data_dir.exists():
+            return []
+
+        keywords = [w.lower() for w in query.split() if len(w) > 2]
+        if not keywords:
+            return []
+
+        results: list[dict[str, Any]] = []
+        for fp in sorted(data_dir.rglob("*")):
+            if not fp.is_file() or fp.suffix not in extensions:
+                continue
+            if fp.stat().st_size > 50_000:
+                continue
+            try:
+                text = fp.read_text(errors="replace")
+            except Exception:
+                continue
+
+            text_lower = text.lower()
+            matched_keywords = [kw for kw in keywords if kw in text_lower]
+            if not matched_keywords:
+                continue
+
+            # Extract a snippet around the first match
+            first_kw = matched_keywords[0]
+            idx = text_lower.find(first_kw)
+            start = max(0, idx - 100)
+            end = min(len(text), idx + max_chars_per_file)
+            snippet = text[start:end].strip()
+
+            results.append({
+                "path": str(fp.relative_to(data_dir)),
+                "matched_keywords": matched_keywords,
+                "keyword_count": len(matched_keywords),
+                "snippet": snippet,
+            })
+
+            if len(results) >= max_files:
+                break
+
+        # Sort by number of keyword matches (most relevant first)
+        results.sort(key=lambda r: r["keyword_count"], reverse=True)
+        return results
+
+    # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
