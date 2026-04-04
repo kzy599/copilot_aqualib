@@ -102,3 +102,113 @@ def test_save_vendor_trace(workspace: WorkspaceManager):
     # listing without filter returns all
     all_traces = workspace.list_vendor_traces()
     assert len(all_traces) == 1
+
+
+# ---------------------------------------------------------------------------
+# Project metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_project_defaults(workspace: WorkspaceManager):
+    """create_project uses the base dir name when no name given."""
+    meta = workspace.create_project()
+    assert meta["name"] == workspace.dirs.base.name
+    assert meta["task_count"] == 0
+    assert meta["description"] == ""
+    assert meta["summary"] == ""
+    assert len(meta["project_id"]) == 8
+    assert workspace.dirs.project_file.exists()
+
+
+def test_create_project_custom_name(workspace: WorkspaceManager):
+    meta = workspace.create_project(name="my_study", description="protein research")
+    assert meta["name"] == "my_study"
+    assert meta["description"] == "protein research"
+
+
+def test_load_project_returns_none_when_missing(workspace: WorkspaceManager):
+    assert workspace.load_project() is None
+
+
+def test_save_and_load_project(workspace: WorkspaceManager):
+    meta = workspace.create_project(name="test_proj")
+    loaded = workspace.load_project()
+    assert loaded is not None
+    assert loaded["name"] == "test_proj"
+    assert loaded["project_id"] == meta["project_id"]
+
+
+def test_append_and_load_context_log(workspace: WorkspaceManager):
+    entry1 = {"task_id": "aaa", "query": "q1", "status": "approved", "skills_used": ["s1"]}
+    entry2 = {"task_id": "bbb", "query": "q2", "status": "needs_revision", "skills_used": ["s2"]}
+    workspace.append_context_log(entry1)
+    workspace.append_context_log(entry2)
+
+    entries = workspace.load_context_log()
+    assert len(entries) == 2
+    assert entries[0]["task_id"] == "aaa"
+    assert entries[1]["task_id"] == "bbb"
+
+
+def test_load_context_log_empty(workspace: WorkspaceManager):
+    assert workspace.load_context_log() == []
+
+
+def test_build_project_summary_empty(workspace: WorkspaceManager):
+    assert workspace.build_project_summary() == ""
+
+
+def test_build_project_summary(workspace: WorkspaceManager):
+    workspace.append_context_log({
+        "task_id": "a1", "query": "q1", "status": "approved",
+        "skills_used": ["seq_align", "drug_int"], "timestamp": "2026-04-01T00:00:00",
+    })
+    workspace.append_context_log({
+        "task_id": "a2", "query": "q2", "status": "approved",
+        "skills_used": ["seq_align"], "timestamp": "2026-04-02T00:00:00",
+    })
+    workspace.append_context_log({
+        "task_id": "a3", "query": "q3", "status": "needs_revision",
+        "skills_used": ["drug_int"], "timestamp": "2026-04-03T00:00:00",
+    })
+
+    summary = workspace.build_project_summary()
+    assert "3 tasks completed" in summary
+    assert "approved" in summary
+    assert "needs_revision" in summary
+    assert "seq_align (2×)" in summary
+    assert "drug_int (2×)" in summary
+    assert "Last run: 2026-04-03" in summary
+
+
+def test_update_project_after_task(workspace: WorkspaceManager):
+    workspace.create_project(name="test")
+
+    task = Task(
+        user_query="Align MVKLF",
+        status=TaskStatus.APPROVED,
+        vendor_priority_satisfied=True,
+        skill_invocations=[
+            SkillInvocation(skill_name="seq_align", source=SkillSource.VENDOR, success=True),
+        ],
+    )
+    workspace.update_project_after_task(task)
+
+    meta = workspace.load_project()
+    assert meta is not None
+    assert meta["task_count"] == 1
+    assert "1 tasks completed" in meta["summary"]
+
+    entries = workspace.load_context_log()
+    assert len(entries) == 1
+    assert entries[0]["task_id"] == task.task_id
+    assert entries[0]["status"] == "approved"
+    assert entries[0]["skills_used"] == ["seq_align"]
+
+
+def test_update_project_after_task_no_project(workspace: WorkspaceManager):
+    """update_project_after_task is a no-op when no project.json exists."""
+    task = Task(user_query="test", status=TaskStatus.APPROVED)
+    workspace.update_project_after_task(task)  # should not raise
+    assert workspace.load_project() is None
+    assert workspace.load_context_log() == []

@@ -36,6 +36,16 @@ class DirectorySettings(BaseModel):
         description="Dedicated trace logs for every vendor skill invocation.",
     )
 
+    @property
+    def project_file(self) -> Path:
+        """Path to the project manifest file."""
+        return self.base / "project.json"
+
+    @property
+    def context_log(self) -> Path:
+        """Path to the context log (JSONL) file."""
+        return self.base / "context_log.jsonl"
+
     def resolve(self) -> "DirectorySettings":
         """Return a copy with all paths resolved relative to *base*."""
         return DirectorySettings(

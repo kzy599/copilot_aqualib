@@ -62,6 +62,10 @@ def run(
     """Run the full agent pipeline (Searcher → Executor → Reviewer)."""
     settings = _get_settings(base_dir, verbose)
 
+    # Warn if no project has been initialised
+    if not settings.directories.project_file.exists():
+        rprint("[yellow]⚠️ No project found. Run 'aqualib init' first to set up your workspace.[/yellow]")
+
     async def _run():
         from aqualib.bootstrap import build_orchestrator
 
@@ -181,12 +185,27 @@ def report(
 def init(
     base_dir: str | None = typer.Option(None, "--base-dir", "-d"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Project name (defaults to directory name)."),
+    description: str = typer.Option("", "--description", help="Project description."),
 ) -> None:
     """Initialise the workspace directory structure and default config."""
     settings = _get_settings(base_dir, verbose)
     from aqualib.workspace.manager import WorkspaceManager
 
-    WorkspaceManager(settings)
+    ws = WorkspaceManager(settings)
+
+    # Detect existing vs. new project
+    existing = ws.load_project()
+    if existing:
+        created = existing.get("created_at", "unknown")[:10]
+        task_count = existing.get("task_count", 0)
+        rprint(
+            f"[cyan]📂 Existing project found: {existing['name']} "
+            f"(created {created}, {task_count} tasks). Workspace is ready.[/cyan]"
+        )
+    else:
+        meta = ws.create_project(name=name, description=description)
+        rprint(f"[green]🆕 New project initialised: {meta['name']}[/green]")
 
     # Write a starter config file if it doesn't exist
     cfg_path = Path("aqualib.yaml")
@@ -207,6 +226,70 @@ def init(
         "[dim]Drop your vendor skill libraries into [bold]skills/vendor/[/bold] – "
         "they will be auto-discovered at runtime.[/dim]"
     )
+
+
+@app.command()
+def status(
+    base_dir: str | None = typer.Option(None, "--base-dir", "-d"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Number of recent tasks to show."),
+) -> None:
+    """Show the project context at a glance."""
+    settings = _get_settings(base_dir, verbose)
+    from collections import Counter
+
+    from aqualib.workspace.manager import WorkspaceManager
+
+    ws = WorkspaceManager(settings)
+    meta = ws.load_project()
+    if meta is None:
+        rprint("[yellow]⚠️ No project found. Run 'aqualib init' first to set up your workspace.[/yellow]")
+        raise typer.Exit(1)
+
+    entries = ws.load_context_log()
+    status_counts: Counter[str] = Counter()
+    skill_counts: Counter[str] = Counter()
+    for entry in entries:
+        status_counts[entry.get("status", "unknown")] += 1
+        for skill in entry.get("skills_used", []):
+            skill_counts[skill] += 1
+
+    # Task status summary
+    task_count = meta.get("task_count", 0)
+    status_parts = [f"{count} {s}" for s, count in status_counts.most_common()]
+    tasks_detail = f" ({', '.join(status_parts)})" if status_parts else ""
+
+    # Data files
+    data_dir = settings.directories.data
+    data_files = [f.name for f in data_dir.iterdir() if f.is_file()] if data_dir.exists() else []
+    data_summary = (
+        f"{len(data_files)} files in data/ ({', '.join(data_files[:5])})"
+        if data_files
+        else "No files in data/"
+    )
+
+    # Skills summary
+    skill_parts = [f"{name} ({count}×)" for name, count in skill_counts.most_common()]
+    skills_summary = ", ".join(skill_parts) if skill_parts else "none"
+
+    rprint()
+    rprint(f"[bold cyan]📂 Project:[/bold cyan] {meta.get('name', 'unknown')}")
+    rprint(f"   [bold]Created:[/bold]  {meta.get('created_at', 'unknown')[:10]}")
+    rprint(f"   [bold]Updated:[/bold]  {meta.get('updated_at', 'unknown')[:10]}")
+    rprint(f"   [bold]Tasks:[/bold]    {task_count}{tasks_detail}")
+    rprint(f"   [bold]Data:[/bold]     {data_summary}")
+    rprint(f"   [bold]Skills:[/bold]   {skills_summary}")
+
+    if entries:
+        rprint()
+        rprint("[bold]Recent tasks:[/bold]")
+        for entry in entries[-limit:]:
+            tid = entry.get("task_id", "?")
+            query = entry.get("query", "")[:50]
+            entry_status = entry.get("status", "unknown")
+            icon = "✅" if entry_status == "approved" else "⚠️"
+            rprint(f'  • [{tid}] "{query}" {icon} {entry_status}')
+    rprint()
 
 
 # ---------------------------------------------------------------------------

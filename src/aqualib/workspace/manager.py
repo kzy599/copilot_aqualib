@@ -22,8 +22,11 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from aqualib.config import Settings
 from aqualib.core.message import AuditReport, SkillInvocation, Task
@@ -120,6 +123,111 @@ class WorkspaceManager:
 
     # Backward-compatible alias
     list_clawbio_traces = list_vendor_traces
+
+    # ------------------------------------------------------------------
+    # Project metadata
+    # ------------------------------------------------------------------
+
+    def create_project(self, name: str | None = None, description: str = "") -> dict[str, Any]:
+        """Create a new ``project.json`` at the workspace root.
+
+        Returns the project metadata dict.
+        """
+        project_name = name or self.dirs.base.name
+        meta: dict[str, Any] = {
+            "project_id": uuid.uuid4().hex[:8],
+            "name": project_name,
+            "description": description,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "task_count": 0,
+            "tags": [],
+            "summary": "",
+        }
+        self.save_project(meta)
+        return meta
+
+    def load_project(self) -> dict[str, Any] | None:
+        """Load ``project.json`` from the workspace root, or *None* if absent."""
+        pf = self.dirs.project_file
+        if not pf.exists():
+            return None
+        return json.loads(pf.read_text())
+
+    def save_project(self, meta: dict[str, Any]) -> None:
+        """Write *meta* to ``project.json``."""
+        self.dirs.project_file.write_text(json.dumps(meta, indent=2))
+
+    def append_context_log(self, entry: dict[str, Any]) -> None:
+        """Append a single JSON line to ``context_log.jsonl``."""
+        with open(self.dirs.context_log, "a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+
+    def load_context_log(self) -> list[dict[str, Any]]:
+        """Read all entries from ``context_log.jsonl``."""
+        cl = self.dirs.context_log
+        if not cl.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in cl.read_text().splitlines():
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+        return entries
+
+    def build_project_summary(self) -> str:
+        """Build a human-readable cumulative summary from ``context_log.jsonl``."""
+        entries = self.load_context_log()
+        if not entries:
+            return ""
+
+        total = len(entries)
+        status_counts: Counter[str] = Counter()
+        skill_counts: Counter[str] = Counter()
+        last_timestamp = ""
+
+        for entry in entries:
+            status_counts[entry.get("status", "unknown")] += 1
+            for skill in entry.get("skills_used", []):
+                skill_counts[skill] += 1
+            last_timestamp = entry.get("timestamp", last_timestamp)
+
+        status_parts = [f"{count} {status}" for status, count in status_counts.most_common()]
+        skill_parts = [f"{name} ({count}×)" for name, count in skill_counts.most_common()]
+        last_date = last_timestamp[:10] if last_timestamp else "unknown"
+
+        return (
+            f"{total} tasks completed ({', '.join(status_parts)}). "
+            f"Skills used: {', '.join(skill_parts) if skill_parts else 'none'}. "
+            f"Last run: {last_date}."
+        )
+
+    def update_project_after_task(self, task: Task) -> None:
+        """Increment counters, append context log, and regenerate summary.
+
+        Called after every ``save_task`` in the orchestrator pipeline.
+        """
+        meta = self.load_project()
+        if meta is None:
+            return  # no project initialised – skip silently
+
+        meta["task_count"] = meta.get("task_count", 0) + 1
+        meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        # Build context log entry
+        skills_used = [inv.skill_name for inv in task.skill_invocations]
+        entry: dict[str, Any] = {
+            "task_id": task.task_id,
+            "query": task.user_query,
+            "status": task.status.value,
+            "skills_used": skills_used,
+            "vendor_priority_satisfied": task.vendor_priority_satisfied or False,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.append_context_log(entry)
+
+        meta["summary"] = self.build_project_summary()
+        self.save_project(meta)
 
     # ------------------------------------------------------------------
     # Persistence
