@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from aqualib.config import Settings
+    from aqualib.workspace.manager import WorkspaceManager
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -51,13 +52,44 @@ instead of a built-in tool. If yes, flag it as a violation.
 # ---------------------------------------------------------------------------
 
 
-def build_custom_agents(settings: "Settings") -> list[dict]:
+def build_custom_agents(
+    settings: "Settings",
+    workspace: "WorkspaceManager | None" = None,
+    session_slug: str | None = None,
+) -> list[dict]:
     """Return the Copilot SDK ``custom_agents`` list (executor + reviewer).
 
-    The SDK's sub-agent orchestration mechanism uses these definitions to
-    automatically select and delegate to the right agent based on context.
+    If *workspace* and *session_slug* are provided, injects each agent's
+    role-specific memory (last 5 entries) into their respective prompts.
     """
     vendor_priority_str = "ALWAYS" if settings.vendor_priority else "When appropriate,"
+
+    executor_memory_ctx = ""
+    reviewer_memory_ctx = ""
+
+    if workspace and session_slug:
+        # Inject Executor memory
+        exec_mem = workspace.load_agent_memory(session_slug, "executor")
+        if exec_mem.get("entries"):
+            recent = exec_mem["entries"][-5:]
+            executor_memory_ctx = "\n\nYour previous work in this session:\n"
+            for e in recent:
+                executor_memory_ctx += (
+                    f"- Task: \"{e.get('query', '')}\" → "
+                    f"skills: {', '.join(e.get('skills_used', []))} "
+                    f"| result: {str(e.get('output_preview', 'N/A'))[:80]}\n"
+                )
+
+        # Inject Reviewer memory
+        rev_mem = workspace.load_agent_memory(session_slug, "reviewer")
+        if rev_mem.get("entries"):
+            recent = rev_mem["entries"][-5:]
+            reviewer_memory_ctx = "\n\nYour previous audits in this session:\n"
+            for e in recent:
+                reviewer_memory_ctx += (
+                    f"- Task: \"{e.get('query', '')}\" → {e.get('verdict', '?')} "
+                    f"| violations: {e.get('violations', [])}\n"
+                )
 
     return [
         {
@@ -69,7 +101,7 @@ def build_custom_agents(settings: "Settings") -> list[dict]:
                 "Handles sequence alignment, drug interaction analysis, and data processing."
             ),
             "tools": None,  # all tools available
-            "prompt": _EXECUTOR_PROMPT.format(vendor_priority=vendor_priority_str),
+            "prompt": _EXECUTOR_PROMPT.format(vendor_priority=vendor_priority_str) + executor_memory_ctx,
             "infer": True,  # SDK auto-selects this agent based on context
         },
         {
@@ -80,7 +112,7 @@ def build_custom_agents(settings: "Settings") -> list[dict]:
                 "Called after task execution to validate results."
             ),
             "tools": ["grep", "glob", "view", "read_file"],  # read-only
-            "prompt": _REVIEWER_PROMPT,
+            "prompt": _REVIEWER_PROMPT + reviewer_memory_ctx,
             "infer": False,  # only explicitly delegated by parent agent
         },
     ]

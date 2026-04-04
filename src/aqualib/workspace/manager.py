@@ -475,3 +475,163 @@ class WorkspaceManager:
                 meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
                 results.append({"invocation_id": inv_dir.name, "files": files, "meta": meta})
         return results
+
+    # ------------------------------------------------------------------
+    # Multi-session management
+    # ------------------------------------------------------------------
+
+    def _generate_session_slug(self, name: str | None = None) -> str:
+        """Generate a URL-friendly slug for a new session."""
+        import re
+
+        base = re.sub(r"[^a-z0-9]+", "-", (name or "session").lower()).strip("-")[:30]
+        suffix = uuid.uuid4().hex[:8]
+        return f"{base}-{suffix}"
+
+    def create_session(self, name: str | None = None) -> dict[str, Any]:
+        """Create a new session directory structure and session.json.
+
+        Returns the session metadata dict.
+        """
+        slug = self._generate_session_slug(name)
+        session_dir = self.dirs.base / "sessions" / slug
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "memory").mkdir(exist_ok=True)
+        (session_dir / "results").mkdir(exist_ok=True)
+        (session_dir / "vendor_traces").mkdir(exist_ok=True)
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta: dict[str, Any] = {
+            "session_id": f"aqualib-{slug}",
+            "slug": slug,
+            "name": name or slug,
+            "created_at": now,
+            "updated_at": now,
+            "task_count": 0,
+            "status": "active",
+            "summary": "",
+        }
+        (session_dir / "session.json").write_text(json.dumps(meta, indent=2))
+
+        # Mark as active session in project.json
+        self.update_project({"active_session": slug})
+        logger.info("Created session %s", slug)
+        return meta
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """List all sessions sorted by most recently updated."""
+        sessions_dir = self.dirs.base / "sessions"
+        if not sessions_dir.exists():
+            return []
+        results: list[dict[str, Any]] = []
+        for d in sessions_dir.iterdir():
+            if d.is_dir() and (d / "session.json").exists():
+                try:
+                    results.append(json.loads((d / "session.json").read_text()))
+                except Exception:
+                    pass
+        return sorted(results, key=lambda s: s.get("updated_at", ""), reverse=True)
+
+    def load_session(self, slug: str) -> dict[str, Any] | None:
+        """Load a session's metadata by slug."""
+        path = self.dirs.base / "sessions" / slug / "session.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def find_session_by_prefix(self, prefix: str) -> dict[str, Any] | None:
+        """Find a session by slug prefix (returns the most recent match)."""
+        for s in self.list_sessions():
+            if s["slug"].startswith(prefix):
+                return s
+        return None
+
+    def get_active_session(self) -> dict[str, Any] | None:
+        """Return the active session metadata, or None if not set."""
+        project = self.load_project()
+        if not project or not project.get("active_session"):
+            return None
+        return self.load_session(project["active_session"])
+
+    def session_dir(self, slug: str) -> Path:
+        """Return the path to a session's directory."""
+        return self.dirs.base / "sessions" / slug
+
+    def session_results_dir(self, slug: str) -> Path:
+        """Return (and create) the results directory for a session."""
+        d = self.session_dir(slug) / "results"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def session_vendor_traces_dir(self, slug: str) -> Path:
+        """Return (and create) the vendor_traces directory for a session."""
+        d = self.session_dir(slug) / "vendor_traces"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    # ------------------------------------------------------------------
+    # Agent (role) memory
+    # ------------------------------------------------------------------
+
+    def load_agent_memory(self, slug: str, agent_name: str) -> dict[str, Any]:
+        """Load the memory for a specific agent within a session.
+
+        Returns an empty memory structure if the file does not exist.
+        """
+        path = self.session_dir(slug) / "memory" / f"{agent_name}.json"
+        if not path.exists():
+            return {"agent": agent_name, "session_slug": slug, "entries": []}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {"agent": agent_name, "session_slug": slug, "entries": []}
+
+    def save_agent_memory(self, slug: str, agent_name: str, memory: dict[str, Any]) -> None:
+        """Save agent memory, automatically compacting to the most recent 20 entries."""
+        entries = memory.get("entries", [])
+        if len(entries) > 20:
+            memory["entries"] = entries[-20:]
+        path = self.session_dir(slug) / "memory" / f"{agent_name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(memory, indent=2, ensure_ascii=False))
+
+    def append_agent_memory_entry(
+        self, slug: str, agent_name: str, entry: dict[str, Any]
+    ) -> None:
+        """Append a memory entry for an agent, automatically compacting to 20 entries."""
+        memory = self.load_agent_memory(slug, agent_name)
+        entry.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        memory["entries"].append(entry)
+        self.save_agent_memory(slug, agent_name, memory)
+
+    def update_session_after_task(
+        self, slug: str, query: str, messages: list
+    ) -> None:
+        """Update session.json counters and summary; also update global project.json."""
+        session_meta = self.load_session(slug)
+        if session_meta:
+            session_meta["task_count"] = session_meta.get("task_count", 0) + 1
+            session_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+            session_meta["summary"] = f"Last: {query[:100]}"
+            (self.session_dir(slug) / "session.json").write_text(
+                json.dumps(session_meta, indent=2, ensure_ascii=False)
+            )
+
+        # Update global project.json
+        project = self.load_project()
+        if project:
+            project["task_count"] = project.get("task_count", 0) + 1
+            project["updated_at"] = datetime.now(timezone.utc).isoformat()
+            project["active_session"] = slug
+            project["summary"] = self.build_project_summary()
+            self.save_project(project)
+
+        # Append to global context_log with session tag
+        self.append_context_log({
+            "session_slug": slug,
+            "task_id": uuid.uuid4().hex[:8],
+            "query": query,
+            "status": "completed",
+            "skills_used": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })

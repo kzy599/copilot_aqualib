@@ -58,6 +58,18 @@ def run(
     query: str = typer.Argument(..., help="The user request / task description."),
     base_dir: str | None = typer.Option(None, "--base-dir", "-d", help="Workspace base directory."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    session: str | None = typer.Option(
+        None, "--session", "-s",
+        help="Resume a specific session by slug or prefix. Default: most recent active session.",
+    ),
+    new_session: bool = typer.Option(
+        False, "--new-session",
+        help="Force creation of a new session instead of resuming.",
+    ),
+    session_name: str | None = typer.Option(
+        None, "--session-name",
+        help="Name for the new session (only used with --new-session).",
+    ),
     skip_rag: bool = typer.Option(False, "--skip-rag", help="(Legacy) Skip RAG index build."),
 ) -> None:
     """Run a task using the Copilot SDK agent pipeline."""
@@ -67,18 +79,36 @@ def run(
 
     ws = WorkspaceManager(settings)
 
-    # Project awareness
+    # Ensure project exists
     project = ws.load_project()
     if project is None:
         rprint("[yellow]⚠️ No project found. Run 'aqualib init' first to set up your workspace.[/yellow]")
+
+    # Determine session slug
+    target_slug: str | None = None
+    if new_session:
+        meta = ws.create_session(name=session_name)
+        target_slug = meta["slug"]
+        rprint(f"[green]🆕 New session: {meta['name']} ({target_slug})[/green]")
+    elif session:
+        found = ws.find_session_by_prefix(session)
+        if found:
+            target_slug = found["slug"]
+            rprint(
+                f"[cyan]📂 Resuming session: {found['name']} "
+                f"({target_slug}, {found['task_count']} tasks)[/cyan]"
+            )
+        else:
+            rprint(f"[red]Session '{session}' not found.[/red]")
+            raise typer.Exit(1)
     else:
-        task_count = project.get("task_count", 0)
-        session_id = project.get("session_id", "")
-        session_label = f"session: {session_id[:20]}…" if session_id else "new session"
-        rprint(
-            f"[cyan]📂 Project: {project.get('name', 'unknown')} "
-            f"({task_count} previous tasks, {session_label})[/cyan]"
-        )
+        active = ws.get_active_session()
+        if active:
+            target_slug = active["slug"]
+            rprint(
+                f"[cyan]📂 Session: {active['name']} "
+                f"({target_slug}, {active['task_count']} tasks)[/cyan]"
+            )
 
     async def _run() -> list[str]:
         from aqualib.sdk.client import AquaLibClient
@@ -88,8 +118,8 @@ def run(
         client = await aqua_client.start()
 
         try:
-            sm = SessionManager(client, settings, ws)
-            session = await sm.get_or_create_session()
+            sm = SessionManager(client, settings, ws, session_slug=target_slug)
+            sdk_session, actual_slug = await sm.get_or_create_session()
 
             done = asyncio.Event()
             result_messages: list[str] = []
@@ -110,14 +140,24 @@ def run(
                 elif type_val == "subagent.completed":
                     name = getattr(data, "agent_display_name", "agent")
                     rprint(f"  [dim]✅ {name} completed[/dim]")
+                    # Write reviewer memory when reviewer completes
+                    agent_name = getattr(data, "agent_name", "")
+                    if agent_name == "reviewer":
+                        content = getattr(data, "content", "") or ""
+                        ws.append_agent_memory_entry(actual_slug, "reviewer", {
+                            "query": query,
+                            "verdict": _extract_verdict(content),
+                            "violations": _extract_violations(content),
+                            "suggestions": _extract_suggestions(content),
+                        })
                 elif type_val == "session.idle":
                     done.set()
 
-            session.on(on_event)
-            await session.send(query)
+            sdk_session.on(on_event)
+            await sdk_session.send(query)
             await done.wait()
 
-            ws.update_project_after_task(query, result_messages)
+            ws.update_session_after_task(actual_slug, query, result_messages)
             return result_messages
 
         finally:
@@ -137,6 +177,45 @@ def run(
         raise typer.Exit(1)
 
 
+def _extract_verdict(content: str) -> str:
+    """Extract VERDICT from reviewer output."""
+    for line in content.splitlines():
+        if "VERDICT:" in line:
+            if "approved" in line.lower():
+                return "approved"
+            if "needs_revision" in line.lower():
+                return "needs_revision"
+    return "unknown"
+
+
+def _extract_violations(content: str) -> list[str]:
+    """Extract VENDOR_PRIORITY violations from reviewer output."""
+    for line in content.splitlines():
+        if "VENDOR_PRIORITY:" in line and "violated" in line.lower():
+            # Extract reason after the dash
+            parts = line.split("-", 1)
+            if len(parts) > 1:
+                return [parts[1].strip()]
+    return []
+
+
+def _extract_suggestions(content: str) -> list[str]:
+    """Extract SUGGESTIONS from reviewer output (up to 3)."""
+    suggestions: list[str] = []
+    in_suggestions = False
+    for line in content.splitlines():
+        if "SUGGESTIONS:" in line:
+            in_suggestions = True
+            continue
+        if in_suggestions and line.strip().startswith("-"):
+            suggestions.append(line.strip().lstrip("- "))
+            if len(suggestions) >= 3:
+                break
+        elif in_suggestions and line.strip() and not line.strip().startswith("-"):
+            break
+    return suggestions
+
+
 @app.command()
 def skills(
     base_dir: str | None = typer.Option(None, "--base-dir", "-d"),
@@ -144,9 +223,11 @@ def skills(
 ) -> None:
     """List all registered skills (vendor skills shown first)."""
     settings = _get_settings(base_dir, verbose)
-    from aqualib.bootstrap import build_registry
+    from aqualib.skills.scanner import scan_all_skill_dirs
+    from aqualib.workspace.manager import WorkspaceManager
 
-    registry = build_registry(settings)
+    ws = WorkspaceManager(settings)
+    skill_metas = scan_all_skill_dirs(settings, ws)
 
     table = Table(title="Registered Skills")
     table.add_column("Name", style="cyan")
@@ -154,12 +235,52 @@ def skills(
     table.add_column("Description")
     table.add_column("Tags", style="dim")
 
-    for skill in registry.list_vendor() + registry.list_generic():
+    for meta in skill_metas:
         table.add_row(
-            skill.meta.name,
-            skill.meta.source.value,
-            skill.meta.description[:80],
-            ", ".join(skill.meta.tags),
+            f"vendor_{meta.name}",
+            str(meta.skill_dir.parent.name),
+            meta.description[:80],
+            ", ".join(meta.tags),
+        )
+    console.print(table)
+
+
+@app.command()
+def sessions(
+    base_dir: str | None = typer.Option(None, "--base-dir", "-d"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """List all sessions in the current project."""
+    settings = _get_settings(base_dir, verbose)
+    from aqualib.workspace.manager import WorkspaceManager
+
+    ws = WorkspaceManager(settings)
+    all_sessions = ws.list_sessions()
+
+    if not all_sessions:
+        rprint("[dim]No sessions found. Run 'aqualib run' to create one.[/dim]")
+        return
+
+    active = ws.get_active_session()
+    active_slug = active["slug"] if active else ""
+
+    table = Table(title="Sessions")
+    table.add_column("", width=2)  # active indicator
+    table.add_column("Slug", style="cyan")
+    table.add_column("Name")
+    table.add_column("Tasks", justify="right")
+    table.add_column("Last Updated", style="dim")
+    table.add_column("Status")
+
+    for s in all_sessions:
+        indicator = "▶" if s["slug"] == active_slug else ""
+        table.add_row(
+            indicator,
+            s["slug"],
+            s.get("name", ""),
+            str(s.get("task_count", 0)),
+            s.get("updated_at", "")[:16],
+            s.get("status", "active"),
         )
     console.print(table)
 
@@ -243,30 +364,41 @@ def init(
     # Write a starter config file if it doesn't exist
     cfg_path = Path("aqualib.yaml")
     if not cfg_path.exists():
-        cfg_template = (
-            f"llm:\n"
-            f"  api_key: \"\"              # defaults to OPENAI_API_KEY env var\n"
-            f"  base_url: null           # set for Azure, DeepSeek, Ollama, etc."
-            f" Also reads AQUALIB_LLM_BASE_URL / OPENAI_BASE_URL\n"
-            f"  model: {settings.llm.model}\n"
-            f"  temperature: {settings.llm.temperature}\n"
-            f"  max_tokens: {settings.llm.max_tokens}\n"
-            f"\n"
-            f"rag:\n"
-            f"  api_key: \"\"              # defaults to AQUALIB_RAG_API_KEY env var,"
-            f" then falls back to llm.api_key\n"
-            f"  base_url: null           # defaults to AQUALIB_RAG_BASE_URL env var,"
-            f" then falls back to llm.base_url\n"
-            f"  chunk_size: {settings.rag.chunk_size}\n"
-            f"  chunk_overlap: {settings.rag.chunk_overlap}\n"
-            f"  similarity_top_k: {settings.rag.similarity_top_k}\n"
-            f"  embed_model: {settings.rag.embed_model}\n"
-            f"\n"
-            f"vendor_priority: {str(settings.vendor_priority).lower()}\n"
-            f"\n"
-            f"directories:\n"
-            f"  base: ./aqualib_workspace\n"
-        )
+        # Read the example config as the template (includes copilot: section)
+        example_path = Path(__file__).parent.parent.parent / "aqualib.yaml.example"
+        if example_path.is_file():
+            cfg_template = example_path.read_text()
+        else:
+            cfg_template = (
+                f"copilot:\n"
+                f"  auth: \"github\"          # \"github\" | \"token\" | \"byok\"\n"
+                f"  github_token: \"\"        # reads GH_TOKEN / GITHUB_TOKEN\n"
+                f"  model: {settings.copilot.model}\n"
+                f"  streaming: {str(settings.copilot.streaming).lower()}\n"
+                f"  cli_path: null\n"
+                f"  use_stdio: true\n"
+                f"\n"
+                f"directories:\n"
+                f"  base: ./aqualib_workspace\n"
+                f"\n"
+                f"vendor_priority: {str(settings.vendor_priority).lower()}\n"
+                f"\n"
+                f"rag:\n"
+                f"  enabled: false\n"
+                f"  api_key: \"\"              # defaults to AQUALIB_RAG_API_KEY\n"
+                f"  base_url: null\n"
+                f"  chunk_size: {settings.rag.chunk_size}\n"
+                f"  chunk_overlap: {settings.rag.chunk_overlap}\n"
+                f"  similarity_top_k: {settings.rag.similarity_top_k}\n"
+                f"  embed_model: {settings.rag.embed_model}\n"
+                f"\n"
+                f"llm:\n"
+                f"  api_key: \"\"              # defaults to OPENAI_API_KEY env var\n"
+                f"  base_url: null\n"
+                f"  model: {settings.llm.model}\n"
+                f"  temperature: {settings.llm.temperature}\n"
+                f"  max_tokens: {settings.llm.max_tokens}\n"
+            )
         cfg_path.write_text(cfg_template)
         rprint(f"[green]✅ Config written → {cfg_path}[/green]")
 

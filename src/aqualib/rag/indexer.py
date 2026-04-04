@@ -58,14 +58,16 @@ class RAGIndexer:
 
         docs: list[Document] = []
 
-        # 1. Skill descriptions
-        for desc in self.registry.to_descriptions():
-            docs.append(
-                Document(
-                    text=json.dumps(desc, indent=2),
-                    metadata={"type": "skill", "name": desc["name"], "source": desc["source"]},
+        # 1. Skill descriptions (optional — registry may be empty in SDK path)
+        skill_descs = self.registry.to_descriptions()
+        if skill_descs:
+            for desc in skill_descs:
+                docs.append(
+                    Document(
+                        text=json.dumps(desc, indent=2),
+                        metadata={"type": "skill", "name": desc["name"], "source": desc["source"]},
+                    )
                 )
-            )
 
         # 2. Files in the data directory
         data_dir = self.settings.directories.data

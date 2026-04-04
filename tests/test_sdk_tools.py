@@ -140,12 +140,12 @@ class TestWorkspaceSearchTool:
             if asyncio.iscoroutine(result):
                 result = await result
         else:
-            # Real SDK tool
-            class MockParams:
-                query = "protein"
-                max_results = 5
+            # Real SDK tool — handler expects a ToolInvocation with .arguments dict
+            class MockInvocation:
+                arguments = {"query": "protein", "max_results": 5}
 
-            result = await tool(MockParams())
+            tool_result = await tool.handler(MockInvocation())
+            result = tool_result.text_result_for_llm
 
         import json
         hits = json.loads(result)
@@ -169,11 +169,11 @@ class TestReadSkillDocTool:
             fn = tool["_fn"]
             result = fn({"skill_name": "nonexistent", "include_readme": False})
         else:
-            class MockParams:
-                skill_name = "nonexistent"
-                include_readme = False
+            class MockInvocation:
+                arguments = {"skill_name": "nonexistent", "include_readme": False}
 
-            result = await tool(MockParams())
+            tool_result = await tool.handler(MockInvocation())
+            result = tool_result.text_result_for_llm
 
         assert "not found" in result.lower()
 
@@ -202,11 +202,11 @@ class TestReadSkillDocTool:
             fn = tool["_fn"]
             result = fn({"skill_name": "my_skill", "include_readme": False})
         else:
-            class MockParams:
-                skill_name = "my_skill"
-                include_readme = False
+            class MockInvocation:
+                arguments = {"skill_name": "my_skill", "include_readme": False}
 
-            result = await tool(MockParams())
+            tool_result = await tool.handler(MockInvocation())
+            result = tool_result.text_result_for_llm
 
         assert "My Skill" in result
         assert "This is the documentation" in result
