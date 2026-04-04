@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Maximum wall-clock time for a single vendor skill invocation.
+# Scientific workflows (genome assembly, GWAS, phylogenetics) can run
+# for hours; this timeout is a last-resort safeguard, not a task limit.
+_VENDOR_TIMEOUT_SECONDS = 43200  # 12 hours
+
 # ---------------------------------------------------------------------------
 # Pydantic models at module scope (required for get_type_hints in @define_tool)
 # ---------------------------------------------------------------------------
@@ -220,19 +225,17 @@ async def _run_vendor_skill(
         stderr=asyncio.subprocess.PIPE,
         cwd=str(meta.vendor_root),
     )
-    _VENDOR_TIMEOUT = 300  # seconds
-
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         workspace.save_sdk_vendor_trace(
             meta.name,
-            {"returncode": -1, "stdout": "", "stderr": f"Timeout after {_VENDOR_TIMEOUT}s"},
+            {"returncode": -1, "stdout": "", "stderr": f"Timeout after {_VENDOR_TIMEOUT_SECONDS}s"},
             session_slug=session_slug,
         )
-        return f"ERROR: Vendor skill '{meta.name}' timed out after {_VENDOR_TIMEOUT}s."
+        return f"ERROR: Vendor skill '{meta.name}' timed out after {_VENDOR_TIMEOUT_SECONDS}s."
 
     workspace.save_sdk_vendor_trace(
         meta.name,

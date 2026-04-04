@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Maximum wall-clock time for a single vendor skill invocation.
+# Scientific workflows (genome assembly, GWAS, phylogenetics) can run
+# for hours; this timeout is a last-resort safeguard, not a task limit.
+_VENDOR_TIMEOUT_SECONDS = 43200  # 12 hours
+
 # ---------------------------------------------------------------------------
 # SKILL.md parser
 # ---------------------------------------------------------------------------
@@ -172,16 +177,15 @@ class VendorCliSkill(BaseSkill):
             cwd=str(self._vendor_root),
         )
 
-        _VENDOR_TIMEOUT = 300  # seconds
-
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            raise RuntimeError(
-                f"Vendor CLI '{self.meta.name}' timed out after {_VENDOR_TIMEOUT}s"
-            )
+            timeout_msg = f"Vendor CLI '{self.meta.name}' timed out after {_VENDOR_TIMEOUT_SECONDS}s"
+            (output_dir / "cli_stdout.txt").write_text("")
+            (output_dir / "cli_stderr.txt").write_text(timeout_msg)
+            raise RuntimeError(timeout_msg)
 
         result: dict[str, Any] = {
             "skill": self.meta.name,
