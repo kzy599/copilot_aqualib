@@ -261,7 +261,12 @@ def mount_clawbio_skills(
 
 
 def _load_skill_from_md(md_file: Path, *, clawbio_root: Path) -> BaseSkill | None:
-    """Parse a single ``SKILL.md`` and return a :class:`ClawBioCliSkill`."""
+    """Parse a single ``SKILL.md`` and return a :class:`ClawBioCliSkill`.
+
+    The skill name extracted from the Markdown is sanitised for use as a
+    registry key: whitespace is replaced with underscores and the result is
+    lowercased (e.g. ``"Gene Expression"`` → ``"gene_expression"``).
+    """
     text = md_file.read_text(encoding="utf-8")
     meta_dict = parse_skill_md(text)
 
