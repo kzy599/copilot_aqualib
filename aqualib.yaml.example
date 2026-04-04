@@ -1,0 +1,83 @@
+# aqualib.yaml.example
+# Copy this file to aqualib.yaml in your project directory and fill in the values.
+# AquaLib v0.2.0 — GitHub Copilot SDK Configuration
+
+# ---------------------------------------------------------------------------
+# Copilot SDK configuration
+# ---------------------------------------------------------------------------
+copilot:
+  # Authentication mode: "github" (logged-in user), "token" (PAT), or "byok" (own API)
+  auth: "github"
+
+  # GitHub Personal Access Token — only needed when auth="token"
+  # Also reads GH_TOKEN / GITHUB_TOKEN environment variables.
+  github_token: ""
+
+  # BYOK (Bring Your Own Key) provider — only needed when auth="byok"
+  # Supports any OpenAI-compatible endpoint (Ollama, Azure OpenAI, Anthropic, etc.)
+  provider:
+    type: "openai"                    # "openai" | "azure" | "anthropic"
+    base_url: ""                      # e.g. "http://localhost:11434/v1" for Ollama
+    api_key: ""                       # Also reads AQUALIB_PROVIDER_API_KEY env var
+
+    # Azure-specific settings (only when type="azure")
+    azure:
+      api_version: "2024-10-21"
+
+  # Default model for new sessions
+  model: "gpt-4o"
+
+  # Reasoning effort: null | "low" | "medium" | "high" | "xhigh"
+  # Only applies to models that support extended thinking.
+  reasoning_effort: null
+
+  # Enable streaming responses (shows output progressively in the terminal)
+  streaming: false
+
+  # Path to a custom Copilot CLI binary.
+  # If null, the SDK will locate the CLI automatically.
+  # Also reads COPILOT_CLI_PATH environment variable.
+  cli_path: null
+
+  # Transport: true = stdio (recommended), false = TCP
+  use_stdio: true
+
+# ---------------------------------------------------------------------------
+# Workspace layout
+# ---------------------------------------------------------------------------
+directories:
+  base: ./aqualib_workspace   # root of all workspace files
+
+# ---------------------------------------------------------------------------
+# Vendor skill priority
+# ---------------------------------------------------------------------------
+# When true, the framework ALWAYS prefers vendor_ skills over built-in tools.
+# The on_pre_tool_use hook enforces this at runtime.
+vendor_priority: true
+
+# ---------------------------------------------------------------------------
+# RAG pipeline (optional — for workspace data/ indexing)
+# ---------------------------------------------------------------------------
+rag:
+  # API key for the embedding model.
+  # Reads AQUALIB_RAG_API_KEY env var; falls back to OPENAI_API_KEY.
+  api_key: ""
+
+  # Base URL for the embedding endpoint (null = use OpenAI default).
+  # Reads AQUALIB_RAG_BASE_URL env var; falls back to llm.base_url.
+  base_url: null
+
+  embed_model: "text-embedding-3-small"
+  chunk_size: 512
+  chunk_overlap: 64
+  similarity_top_k: 5
+
+# ---------------------------------------------------------------------------
+# Legacy LLM settings (kept for backward compatibility)
+# ---------------------------------------------------------------------------
+llm:
+  api_key: ""           # reads OPENAI_API_KEY env var
+  base_url: null        # reads AQUALIB_LLM_BASE_URL / OPENAI_BASE_URL env var
+  model: "gpt-4o"
+  temperature: 0.2
+  max_tokens: 4096

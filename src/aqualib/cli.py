@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich import print as rprint
@@ -57,60 +58,83 @@ def run(
     query: str = typer.Argument(..., help="The user request / task description."),
     base_dir: str | None = typer.Option(None, "--base-dir", "-d", help="Workspace base directory."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
-    skip_rag: bool = typer.Option(False, "--skip-rag", help="Skip RAG index build (faster, no context)."),
+    skip_rag: bool = typer.Option(False, "--skip-rag", help="(Legacy) Skip RAG index build."),
 ) -> None:
-    """Run the full agent pipeline (Searcher → Executor → Reviewer)."""
+    """Run a task using the Copilot SDK agent pipeline."""
     settings = _get_settings(base_dir, verbose)
 
+    from aqualib.workspace.manager import WorkspaceManager
+
+    ws = WorkspaceManager(settings)
+
     # Project awareness
-    if not settings.directories.project_file.exists():
+    project = ws.load_project()
+    if project is None:
         rprint("[yellow]⚠️ No project found. Run 'aqualib init' first to set up your workspace.[/yellow]")
     else:
-        import json
-
-        meta = json.loads(settings.directories.project_file.read_text())
-        task_count = meta.get("task_count", 0)
+        task_count = project.get("task_count", 0)
+        session_id = project.get("session_id", "")
+        session_label = f"session: {session_id[:20]}…" if session_id else "new session"
         rprint(
-            f"[cyan]📂 Project: {meta.get('name', 'unknown')} "
-            f"({task_count} previous tasks)[/cyan]"
+            f"[cyan]📂 Project: {project.get('name', 'unknown')} "
+            f"({task_count} previous tasks, {session_label})[/cyan]"
         )
 
-    async def _run():
-        from aqualib.bootstrap import build_orchestrator
+    async def _run() -> list[str]:
+        from aqualib.sdk.client import AquaLibClient
+        from aqualib.sdk.session_manager import SessionManager
 
-        orch = await build_orchestrator(settings, skip_rag_index=skip_rag)
-        task = await orch.run(query)
-        return task
+        aqua_client = AquaLibClient(settings)
+        client = await aqua_client.start()
 
-    task = asyncio.run(_run())
+        try:
+            sm = SessionManager(client, settings, ws)
+            session = await sm.get_or_create_session()
 
-    # Pretty output
-    status_colour = "green" if task.review_passed else "yellow"
-    rprint(Panel(
-        f"[bold]Task:[/bold] {task.task_id}\n"
-        f"[bold]Status:[/bold] [{status_colour}]{task.status.value}[/{status_colour}]\n"
-        f"[bold]Vendor Priority:[/bold] {'✅' if task.vendor_priority_satisfied else '⚠️'}\n"
-        f"[bold]Review:[/bold] {task.review_notes[:200] or 'N/A'}",
-        title="🐙 AquaLib Result",
-    ))
+            done = asyncio.Event()
+            result_messages: list[str] = []
 
-    # Show skill invocations
-    if task.skill_invocations:
-        table = Table(title="Skill Invocations")
-        table.add_column("Skill", style="cyan")
-        table.add_column("Source", style="magenta")
-        table.add_column("OK?", justify="center")
-        table.add_column("Output Dir")
-        for inv in task.skill_invocations:
-            table.add_row(
-                inv.skill_name,
-                inv.source.value,
-                "✅" if inv.success else "❌",
-                inv.output_dir or "N/A",
-            )
-        console.print(table)
+            def on_event(event: Any) -> None:
+                event_type = getattr(event, "type", None)
+                type_val = event_type.value if hasattr(event_type, "value") else str(event_type)
+                data = getattr(event, "data", {})
 
-    rprint(f"\n📁 Results: {settings.directories.results / task.task_id}")
+                if type_val == "assistant.message":
+                    content = getattr(data, "content", "") or ""
+                    result_messages.append(content)
+                    if content:
+                        rprint(f"[green]{content}[/green]")
+                elif type_val == "subagent.started":
+                    name = getattr(data, "agent_display_name", "agent")
+                    rprint(f"  [dim]▶ {name} started[/dim]")
+                elif type_val == "subagent.completed":
+                    name = getattr(data, "agent_display_name", "agent")
+                    rprint(f"  [dim]✅ {name} completed[/dim]")
+                elif type_val == "session.idle":
+                    done.set()
+
+            session.on(on_event)
+            await session.send(query)
+            await done.wait()
+
+            ws.update_project_after_task(query, result_messages)
+            return result_messages
+
+        finally:
+            await aqua_client.stop()
+
+    try:
+        results = asyncio.run(_run())
+        rprint(Panel(
+            f"[bold]Query:[/bold] {query[:120]}\n"
+            f"[bold]Status:[/bold] [green]completed[/green]\n"
+            f"[bold]Messages:[/bold] {len(results)} response(s)",
+            title="🐙 AquaLib Result",
+        ))
+        rprint(f"\n📁 Results: {settings.directories.results}")
+    except ImportError as exc:
+        rprint(f"[red]❌ {exc}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()

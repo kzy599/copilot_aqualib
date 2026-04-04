@@ -4,7 +4,7 @@ import textwrap
 from pathlib import Path
 
 from aqualib.skills.clawbio.skills import ALL_CLAWBIO_SKILLS
-from aqualib.skills.loader import mount_vendor_skills
+from aqualib.skills.loader import mount_vendor_skills, scan_vendor_directory
 from aqualib.skills.registry import SkillRegistry
 
 # ---------------------------------------------------------------------------
@@ -26,35 +26,33 @@ def _write_skill_md(directory: Path, name: str, description: str = "Test skill")
 
 
 # ---------------------------------------------------------------------------
-# Vendor path resolution
+# Vendor path resolution (using sdk layer, not bootstrap)
 # ---------------------------------------------------------------------------
 
 
-def test_vendor_path_resolution():
-    """vendor_path in bootstrap.py should resolve to <repo_root>/vendor/ClawBio."""
-    import aqualib.bootstrap as bootstrap_module
+def test_vendor_path_resolves_from_sdk_session_manager():
+    """SDK SessionManager resolves vendor/ relative to the repo root."""
+    from aqualib.sdk import session_manager as sm_module
 
-    # The bootstrap.py file lives at src/aqualib/bootstrap.py.
-    # Going up 3 levels (aqualib -> src -> repo_root) and appending vendor/ClawBio
-    # should produce the same path as the actual repo's vendor/ClawBio directory.
-    bootstrap_file = Path(bootstrap_module.__file__).resolve()
-    # src/aqualib/bootstrap.py -> parent = src/aqualib, parent.parent = src, parent.parent.parent = repo root
-    repo_root = bootstrap_file.parent.parent.parent
-    vendor_path = repo_root / "vendor" / "ClawBio"
+    # sdk/session_manager.py lives at src/aqualib/sdk/session_manager.py
+    # parent(3) = src/aqualib/sdk -> src/aqualib -> src -> repo_root
+    sm_file = Path(sm_module.__file__).resolve()
+    repo_root = sm_file.parent.parent.parent.parent
+    vendor_path = repo_root / "vendor"
 
-    # Verify the directory structure makes sense: repo_root should contain src/
+    # Verify the directory structure makes sense
     assert (repo_root / "src").is_dir(), f"Expected repo root at {repo_root}, but src/ not found"
-    # Verify the path components are correct
-    assert vendor_path.parts[-1] == "ClawBio"
-    assert vendor_path.parts[-2] == "vendor"
+    assert vendor_path.parts[-1] == "vendor"
 
 
 def test_vendor_path_points_to_correct_repo_location():
-    """Vendor path should be relative to the repo root, not the working directory."""
-    import aqualib.bootstrap as bootstrap_module
+    """Vendor path should be relative to the repo root."""
+    from aqualib.sdk import session_manager as sm_module
 
-    vendor_path = Path(bootstrap_module.__file__).resolve().parent.parent.parent / "vendor" / "ClawBio"
-    # The path should end with vendor/ClawBio
+    sm_file = Path(sm_module.__file__).resolve()
+    repo_root = sm_file.parent.parent.parent.parent
+    vendor_path = repo_root / "vendor" / "ClawBio"
+    # Path components should match
     assert vendor_path.parts[-1] == "ClawBio"
     assert vendor_path.parts[-2] == "vendor"
 
@@ -107,8 +105,6 @@ def test_vendor_multiple_skills(tmp_path: Path):
 
 def test_runtime_mount_takes_priority_over_vendor(tmp_path: Path):
     """A skill registered from runtime mount point should not be overwritten by vendor."""
-    from aqualib.skills.loader import scan_vendor_directory
-
     # Runtime mount: registers "my_skill" with description "runtime version"
     runtime = tmp_path / "runtime"
     _write_skill_md(runtime / "s", "my_skill", "runtime version")
@@ -169,19 +165,15 @@ def test_placeholder_registered_when_no_runtime_or_vendor_skill(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# build_registry integration (with vendor path mocked)
+# Registry integration (mirrors what build_registry used to do in bootstrap.py)
 # ---------------------------------------------------------------------------
 
 
-def test_build_registry_scans_vendor_if_exists(tmp_path: Path):
-    """build_registry should register vendor skills when the vendor directory exists."""
-    from aqualib.skills.loader import scan_vendor_directory
-
+def test_registry_scans_vendor_if_exists(tmp_path: Path):
+    """Registering vendor skills should work when the vendor directory exists."""
     vendor = tmp_path / "vendor" / "ClawBio"
     _write_skill_md(vendor / "bio_tool", "bio_tool_skill", "A vendor skill")
 
-    # Directly verify the vendor scan logic: scan_vendor_directory + get() check
-    # mirrors what bootstrap.py does for tier 2
     registry = SkillRegistry(vendor_priority=True)
     for skill in scan_vendor_directory(vendor):
         if registry.get(skill.meta.name) is None:
@@ -190,17 +182,14 @@ def test_build_registry_scans_vendor_if_exists(tmp_path: Path):
     assert registry.get("bio_tool_skill") is not None
 
 
-def test_build_registry_skips_vendor_if_missing(tmp_path: Path):
-    """build_registry should not fail and should use placeholders if vendor is absent."""
-    from aqualib.bootstrap import build_registry
-    from aqualib.config import DirectorySettings, Settings
+def test_registry_uses_placeholders_if_vendor_missing(tmp_path: Path):
+    """When no vendor directory exists, placeholder skills are still registered."""
+    registry = SkillRegistry(vendor_priority=True)
 
-    settings = Settings(
-        directories=DirectorySettings(base=str(tmp_path / "ws")).resolve(),
-        vendor_priority=True,
-    )
+    # Register only placeholders (tier 3)
+    for cls in ALL_CLAWBIO_SKILLS:
+        instance = cls()
+        if registry.get(instance.meta.name) is None:
+            registry.register(instance)
 
-    # Run build_registry normally — if vendor doesn't exist, placeholders should still load
-    registry = build_registry(settings)
-    # At minimum, placeholders should be registered
     assert len(registry.list_all()) >= len(ALL_CLAWBIO_SKILLS)

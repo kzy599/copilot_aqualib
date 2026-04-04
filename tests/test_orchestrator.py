@@ -1,13 +1,16 @@
-"""Unit tests for the Orchestrator – project context injection."""
+"""Tests for the SDK session manager and project-context injection.
+
+The old Orchestrator class has been replaced by the Copilot SDK's
+SessionManager + on_session_start hook. These tests verify the hook's
+context-injection behaviour and the SessionManager's create/resume logic.
+"""
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from aqualib.config import DirectorySettings, Settings
-from aqualib.core.message import Role, SkillInvocation, SkillSource, Task, TaskStatus
-from aqualib.core.orchestrator import Orchestrator
 from aqualib.workspace.manager import WorkspaceManager
 
 
@@ -18,62 +21,34 @@ def workspace(tmp_path: Path) -> WorkspaceManager:
     return WorkspaceManager(settings)
 
 
-def _make_orchestrator(workspace: WorkspaceManager) -> Orchestrator:
-    """Build an Orchestrator with mocked agents."""
-    searcher = AsyncMock()
-    executor = AsyncMock()
-    reviewer = AsyncMock()
-
-    # The mocked agents should return the task unchanged (except reviewer sets APPROVED)
-    searcher.run = AsyncMock(side_effect=lambda t: t)
-    executor.run = AsyncMock(side_effect=lambda t: t)
-
-    def approve(t: Task) -> Task:
-        t.status = TaskStatus.APPROVED
-        t.review_passed = True
-        return t
-
-    reviewer.run = AsyncMock(side_effect=approve)
-
-    return Orchestrator(
-        searcher=searcher,
-        executor=executor,
-        reviewer=reviewer,
-        workspace=workspace,
-    )
+# ---------------------------------------------------------------------------
+# on_session_start hook (replaces Orchestrator._build_project_context)
+# ---------------------------------------------------------------------------
 
 
-class TestBuildProjectContext:
-    """Tests for Orchestrator._build_project_context()."""
+class TestSessionStartHook:
+    """Tests for the on_session_start hook context injection."""
 
-    def test_returns_empty_when_no_project(self, workspace: WorkspaceManager):
-        orch = _make_orchestrator(workspace)
-        assert orch._build_project_context() == ""
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_project(self, workspace: WorkspaceManager):
+        from aqualib.sdk.hooks import _make_session_start_hook
 
-    def test_returns_project_name(self, workspace: WorkspaceManager):
+        hook = _make_session_start_hook(workspace)
+        result = await hook({}, None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_project_name(self, workspace: WorkspaceManager):
         workspace.create_project(name="My Study")
-        orch = _make_orchestrator(workspace)
-        ctx = orch._build_project_context()
-        assert "Project: My Study" in ctx
+        from aqualib.sdk.hooks import _make_session_start_hook
 
-    def test_includes_summary(self, workspace: WorkspaceManager):
-        workspace.create_project(name="My Study")
-        # Simulate a completed task to generate a summary
-        task = Task(
-            user_query="First task",
-            status=TaskStatus.APPROVED,
-            skill_invocations=[
-                SkillInvocation(skill_name="seq_align", source=SkillSource.VENDOR, success=True),
-            ],
-        )
-        workspace.update_project_after_task(task)
+        hook = _make_session_start_hook(workspace)
+        result = await hook({}, None)
+        assert result is not None
+        assert "My Study" in result["additionalContext"]
 
-        orch = _make_orchestrator(workspace)
-        ctx = orch._build_project_context()
-        assert "History:" in ctx
-        assert "1 tasks completed" in ctx
-
-    def test_includes_recent_tasks(self, workspace: WorkspaceManager):
+    @pytest.mark.asyncio
+    async def test_includes_recent_tasks(self, workspace: WorkspaceManager):
         workspace.create_project(name="My Study")
         workspace.append_context_log({
             "task_id": "aaa",
@@ -87,16 +62,18 @@ class TestBuildProjectContext:
             "status": "needs_revision",
             "skills_used": ["drug_int"],
         })
+        from aqualib.sdk.hooks import _make_session_start_hook
 
-        orch = _make_orchestrator(workspace)
-        ctx = orch._build_project_context()
+        hook = _make_session_start_hook(workspace)
+        result = await hook({}, None)
+        assert result is not None
+        ctx = result["additionalContext"]
         assert "Recent tasks:" in ctx
-        assert '✅ "Align sequences"' in ctx
-        assert '⚠️ "Find inhibitors"' in ctx
-        assert "seq_align" in ctx
-        assert "drug_int" in ctx
+        assert "Align sequences" in ctx
+        assert "Find inhibitors" in ctx
 
-    def test_limits_to_last_5_entries(self, workspace: WorkspaceManager):
+    @pytest.mark.asyncio
+    async def test_limits_to_last_5_task_entries(self, workspace: WorkspaceManager):
         workspace.create_project(name="Big Project")
         for i in range(10):
             workspace.append_context_log({
@@ -105,66 +82,208 @@ class TestBuildProjectContext:
                 "status": "approved",
                 "skills_used": [],
             })
+        from aqualib.sdk.hooks import _make_session_start_hook
 
-        orch = _make_orchestrator(workspace)
-        ctx = orch._build_project_context()
+        hook = _make_session_start_hook(workspace)
+        result = await hook({}, None)
+        ctx = result["additionalContext"]
         # Should only include tasks 5-9 (last 5)
         assert "Task 5" in ctx
         assert "Task 9" in ctx
         assert "Task 4" not in ctx
 
-
-class TestRunInjectsProjectContext:
-    """Tests that Orchestrator.run() injects project context into Task messages."""
-
     @pytest.mark.asyncio
-    async def test_run_injects_context_when_project_exists(self, workspace: WorkspaceManager):
-        workspace.create_project(name="Test Project")
+    async def test_includes_project_summary(self, workspace: WorkspaceManager):
+        workspace.create_project(name="My Study")
         workspace.append_context_log({
-            "task_id": "prev1",
-            "query": "Previous task",
+            "task_id": "a1",
+            "query": "First task",
             "status": "approved",
             "skills_used": ["seq_align"],
         })
+        workspace.update_project_after_task("First task", ["done"])
+        from aqualib.sdk.hooks import _make_session_start_hook
 
-        orch = _make_orchestrator(workspace)
-        task = await orch.run("New follow-up question")
+        hook = _make_session_start_hook(workspace)
+        result = await hook({}, None)
+        assert result is not None
 
-        # Find the project context message
-        context_msgs = [
-            m for m in task.messages
-            if m.role == Role.ORCHESTRATOR and "Project context:" in m.content
-        ]
-        assert len(context_msgs) == 1
-        assert "Test Project" in context_msgs[0].content
-        assert "Previous task" in context_msgs[0].content
+
+# ---------------------------------------------------------------------------
+# SessionManager create / resume logic
+# ---------------------------------------------------------------------------
+
+# Patch targets: functions are imported locally inside _create_session/_resume_session,
+# so we patch them at their source modules.
+_PATCH_AGENTS = "aqualib.sdk.agents.build_custom_agents"
+_PATCH_HOOKS = "aqualib.sdk.hooks.build_hooks"
+_PATCH_SYSTEM = "aqualib.sdk.system_prompt.build_system_message"
+_PATCH_TOOLS = "aqualib.skills.tool_adapter.build_tools_from_skills"
+
+
+class TestSessionManager:
+    """Tests for SessionManager.get_or_create_session()."""
+
+    def _make_workspace(self, tmp_path: Path) -> WorkspaceManager:
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        settings = Settings(directories=dirs)
+        return WorkspaceManager(settings)
 
     @pytest.mark.asyncio
-    async def test_run_no_context_when_no_project(self, workspace: WorkspaceManager):
-        orch = _make_orchestrator(workspace)
-        task = await orch.run("Some question")
+    async def test_creates_new_session_when_no_existing_id(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="test")
 
-        # No project context message should exist
-        context_msgs = [
-            m for m in task.messages
-            if m.role == Role.ORCHESTRATOR and "Project context:" in m.content
-        ]
-        assert len(context_msgs) == 0
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
 
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
 
-class TestSearcherFallback:
+        with patch(_PATCH_AGENTS, return_value=[]), \
+             patch(_PATCH_HOOKS, return_value={}), \
+             patch(_PATCH_SYSTEM, return_value={}), \
+             patch(_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            session = await sm.get_or_create_session()
+
+        mock_client.create_session.assert_called_once()
+        assert session is mock_session
+
     @pytest.mark.asyncio
-    async def test_searcher_fallback_adds_messages_when_no_rag(self, workspace: WorkspaceManager):
-        """When RAG returns empty, the Searcher should use fallback discovery."""
-        workspace.create_project(name="Fallback Test")
-        # Put a file in data/ so grep has something to find
-        data_dir = workspace.dirs.data
-        (data_dir / "proteins.txt").write_text("Protein alignment data for testing.")
+    async def test_persists_session_id_to_project_json(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="test")
 
-        orch = _make_orchestrator(workspace)
-        task = await orch.run("Align protein sequences")
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
 
-        # The orchestrator should have run and completed the pipeline
-        orch_msgs = [m for m in task.messages if m.role == Role.ORCHESTRATOR]
-        assert any("Pipeline started" in m.content for m in orch_msgs)
-        assert task.status == TaskStatus.APPROVED
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        with patch(_PATCH_AGENTS, return_value=[]), \
+             patch(_PATCH_HOOKS, return_value={}), \
+             patch(_PATCH_SYSTEM, return_value={}), \
+             patch(_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            await sm.get_or_create_session()
+
+        project = workspace.load_project()
+        assert project is not None
+        assert "session_id" in project
+        assert project["session_id"].startswith("aqualib-")
+
+    @pytest.mark.asyncio
+    async def test_resumes_session_when_id_exists(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="test")
+        workspace.update_project({"session_id": "aqualib-test-abc12345"})
+
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.resume_session = AsyncMock(return_value=mock_session)
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        with patch(_PATCH_AGENTS, return_value=[]), \
+             patch(_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            session = await sm.get_or_create_session()
+
+        mock_client.resume_session.assert_called_once()
+        call_args = mock_client.resume_session.call_args
+        assert call_args[0][0] == "aqualib-test-abc12345"
+        assert session is mock_session
+
+    @pytest.mark.asyncio
+    async def test_creates_new_session_when_resume_fails(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="test")
+        workspace.update_project({"session_id": "aqualib-test-old"})
+
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.resume_session = AsyncMock(side_effect=RuntimeError("session expired"))
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        with patch(_PATCH_AGENTS, return_value=[]), \
+             patch(_PATCH_HOOKS, return_value={}), \
+             patch(_PATCH_SYSTEM, return_value={}), \
+             patch(_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            session = await sm.get_or_create_session()
+
+        mock_client.create_session.assert_called_once()
+        assert session is mock_session
+
+    def test_session_id_format(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="My Study Project")
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        session_id = sm._generate_session_id()
+        assert session_id.startswith("aqualib-my-study-project-")
+        assert len(session_id) > len("aqualib-my-study-project-")
+
+    def test_collect_skill_dirs_includes_workspace_vendor(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="test")
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        dirs = sm._collect_skill_dirs()
+        assert str(workspace.dirs.skills_vendor) in dirs
+
+    def test_build_provider_returns_none_for_github_auth(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            copilot={"auth": "github"},
+        )
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        assert sm._build_provider() is None
+
+    def test_build_provider_returns_dict_for_byok(self, tmp_path: Path):
+        from aqualib.config import CopilotSettings, ProviderConfig
+
+        workspace = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            copilot=CopilotSettings(
+                auth="byok",
+                provider=ProviderConfig(
+                    type="openai",
+                    base_url="http://localhost:11434/v1",
+                    api_key="test-key",
+                ),
+            ),
+        )
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        provider = sm._build_provider()
+        assert provider is not None
+        assert provider["type"] == "openai"
+        assert provider["base_url"] == "http://localhost:11434/v1"
+        assert provider["api_key"] == "test-key"

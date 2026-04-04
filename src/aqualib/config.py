@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -86,9 +86,58 @@ class RAGSettings(BaseModel):
     embed_model: str = "text-embedding-3-small"
 
 
+# ---------------------------------------------------------------------------
+# Copilot SDK settings (new in v0.2.0)
+# ---------------------------------------------------------------------------
+
+
+class AzureConfig(BaseModel):
+    """Azure-specific configuration for BYOK mode."""
+
+    api_version: str = "2024-10-21"
+
+
+class ProviderConfig(BaseModel):
+    """BYOK (Bring Your Own Key) provider configuration."""
+
+    type: Literal["openai", "azure", "anthropic"] = "openai"
+    base_url: str = Field(default="", description="Provider base URL (e.g. http://localhost:11434/v1)")
+    api_key: str = Field(default="", description="Provider API key (also reads AQUALIB_PROVIDER_API_KEY)")
+    azure: Optional[AzureConfig] = None
+
+
+class CopilotSettings(BaseModel):
+    """GitHub Copilot SDK session and authentication configuration."""
+
+    auth: Literal["github", "token", "byok"] = Field(
+        default="github",
+        description="Authentication mode: 'github' uses logged-in user, 'token' uses GH_TOKEN, 'byok' uses provider",
+    )
+    github_token: str = Field(
+        default="",
+        description="GitHub token for 'token' auth mode (also reads GH_TOKEN / GITHUB_TOKEN)",
+    )
+    provider: Optional[ProviderConfig] = Field(
+        default=None,
+        description="BYOK provider config (required when auth='byok')",
+    )
+    model: str = Field(default="gpt-4o", description="Default model for sessions")
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | null",
+    )
+    streaming: bool = Field(default=False, description="Enable streaming responses")
+    cli_path: Optional[str] = Field(
+        default=None,
+        description="Custom Copilot CLI path (also reads COPILOT_CLI_PATH)",
+    )
+    use_stdio: bool = Field(default=True, description="Use stdio transport (vs TCP)")
+
+
 class Settings(BaseModel):
     """Root settings object – the single source of truth."""
 
+    copilot: CopilotSettings = Field(default_factory=CopilotSettings)
     directories: DirectorySettings = Field(default_factory=DirectorySettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
@@ -130,7 +179,27 @@ def _load_settings() -> Settings:
 
     settings = Settings(**data)
 
-    # Env-var overrides
+    # ---------------------------------------------------------------------------
+    # Copilot SDK env-var overrides
+    # ---------------------------------------------------------------------------
+    if not settings.copilot.github_token:
+        settings.copilot.github_token = (
+            os.getenv("GH_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
+        )
+    if settings.copilot.cli_path is None:
+        cli_path_env = os.getenv("COPILOT_CLI_PATH", "")
+        if cli_path_env:
+            settings.copilot.cli_path = cli_path_env
+    if settings.copilot.provider is None:
+        settings.copilot.provider = ProviderConfig()
+    if not settings.copilot.provider.api_key:
+        settings.copilot.provider.api_key = os.getenv("AQUALIB_PROVIDER_API_KEY", "")
+    if not settings.copilot.provider.base_url:
+        settings.copilot.provider.base_url = os.getenv("AQUALIB_PROVIDER_BASE_URL", "")
+
+    # ---------------------------------------------------------------------------
+    # Legacy LLM / RAG env-var overrides (kept for backward compatibility)
+    # ---------------------------------------------------------------------------
     if not settings.llm.api_key:
         settings.llm.api_key = os.getenv("OPENAI_API_KEY", "")
     if settings.llm.base_url is None:

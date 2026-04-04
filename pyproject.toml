@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqualib"
-version = "0.1.0"
-description = "AquaLib – Multi-agent framework with Executor, Reviewer, and Searcher agents, vendor skill priority, and RAG-powered information retrieval."
+version = "0.2.0"
+description = "AquaLib – Multi-agent framework built on GitHub Copilot SDK with vendor skill priority, SKILL.md-driven skills, and workspace-isolated audit trails."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "AquaLib Team" },
 ]
-keywords = ["agent", "llm", "rag", "clawbio", "copilot"]
+keywords = ["agent", "llm", "copilot", "vendor-skills", "scientific-computing"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
@@ -20,10 +20,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "openai>=1.14.0",
-    "llama-index-core>=0.11.0",
-    "llama-index-embeddings-openai>=0.2.0",
-    "llama-index-llms-openai>=0.2.0",
+    "github-copilot-sdk>=0.1.0",
     "pydantic>=2.0",
     "typer>=0.9.0",
     "rich>=13.0",
@@ -31,6 +28,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rag = [
+    "openai>=1.14.0",
+    "llama-index-core>=0.11.0",
+    "llama-index-embeddings-openai>=0.2.0",
+]
 api = [
     "uvicorn>=0.27.0",
     "fastapi>=0.110.0",
