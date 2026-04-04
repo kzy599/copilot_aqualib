@@ -75,4 +75,5 @@ class Orchestrator:
                 task.add_message(Role.ORCHESTRATOR, "Max retries reached – returning for manual review.")
 
         self.workspace.save_task(task)
+        self.workspace.update_project_after_task(task)
         return task

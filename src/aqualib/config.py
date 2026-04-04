@@ -36,6 +36,16 @@ class DirectorySettings(BaseModel):
         description="Dedicated trace logs for every vendor skill invocation.",
     )
 
+    @property
+    def project_file(self) -> Path:
+        """Path to the project manifest file."""
+        return self.base / "project.json"
+
+    @property
+    def context_log(self) -> Path:
+        """Path to the context log (JSONL) file."""
+        return self.base / "context_log.jsonl"
+
     def resolve(self) -> "DirectorySettings":
         """Return a copy with all paths resolved relative to *base*."""
         return DirectorySettings(
@@ -61,6 +71,15 @@ class LLMSettings(BaseModel):
 class RAGSettings(BaseModel):
     """Settings for the LlamaIndex-backed RAG pipeline."""
 
+    api_key: str = Field(
+        default="",
+        description="Embedding API key (falls back to AQUALIB_RAG_API_KEY env var, then llm.api_key)",
+    )
+    base_url: Optional[str] = Field(
+        default=None,
+        description="Custom base URL for the embedding API "
+        "(falls back to AQUALIB_RAG_BASE_URL env var, then llm.base_url)",
+    )
     chunk_size: int = 512
     chunk_overlap: int = 64
     similarity_top_k: int = 5
@@ -114,8 +133,21 @@ def _load_settings() -> Settings:
     # Env-var overrides
     if not settings.llm.api_key:
         settings.llm.api_key = os.getenv("OPENAI_API_KEY", "")
+    if settings.llm.base_url is None:
+        llm_base = os.getenv("AQUALIB_LLM_BASE_URL", "") or os.getenv("OPENAI_BASE_URL", "")
+        if llm_base:
+            settings.llm.base_url = llm_base
     if os.getenv("AQUALIB_BASE_DIR"):
         settings.directories.base = Path(os.getenv("AQUALIB_BASE_DIR", "."))
+
+    # RAG env-var fallbacks
+    if not settings.rag.api_key:
+        settings.rag.api_key = os.getenv("AQUALIB_RAG_API_KEY", "") or settings.llm.api_key
+    if settings.rag.base_url is None:
+        rag_base = os.getenv("AQUALIB_RAG_BASE_URL", "")
+        if rag_base:
+            settings.rag.base_url = rag_base
+        # If still None, leave it — indexer.py will fall back to llm.base_url at runtime
 
     settings.directories = settings.directories.resolve()
     return settings

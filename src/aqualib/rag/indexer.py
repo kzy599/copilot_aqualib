@@ -38,6 +38,10 @@ class RAGIndexer:
         from llama_index.llms.openai import OpenAI
 
         # Configure LlamaIndex globals
+        # Resolve credentials: RAG-specific > LLM fallback
+        rag_api_key = self.settings.rag.api_key or self.settings.llm.api_key or None
+        rag_base_url = self.settings.rag.base_url or self.settings.llm.base_url
+
         LISettings.llm = OpenAI(
             model=self.settings.llm.model,
             api_key=self.settings.llm.api_key or None,
@@ -46,8 +50,8 @@ class RAGIndexer:
         )
         LISettings.embed_model = OpenAIEmbedding(
             model_name=self.settings.rag.embed_model,
-            api_key=self.settings.llm.api_key or None,
-            api_base=self.settings.llm.base_url,
+            api_key=rag_api_key,
+            api_base=rag_base_url,
         )
         LISettings.chunk_size = self.settings.rag.chunk_size
         LISettings.chunk_overlap = self.settings.rag.chunk_overlap
