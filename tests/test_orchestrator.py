@@ -147,10 +147,13 @@ class TestSessionManager:
             from aqualib.sdk.session_manager import SessionManager
 
             sm = SessionManager(mock_client, settings, workspace)
-            session = await sm.get_or_create_session()
+            result = await sm.get_or_create_session()
 
         mock_client.create_session.assert_called_once()
+        # get_or_create_session now returns (session, slug)
+        session, slug = result
         assert session is mock_session
+        assert isinstance(slug, str)
 
     @pytest.mark.asyncio
     async def test_persists_session_id_to_project_json(self, tmp_path: Path):
@@ -170,18 +173,27 @@ class TestSessionManager:
             from aqualib.sdk.session_manager import SessionManager
 
             sm = SessionManager(mock_client, settings, workspace)
-            await sm.get_or_create_session()
+            _, slug = await sm.get_or_create_session()
 
         project = workspace.load_project()
         assert project is not None
-        assert "session_id" in project
-        assert project["session_id"].startswith("aqualib-")
+        # New architecture: project stores active_session slug, not session_id directly
+        assert "active_session" in project
+        assert project["active_session"] == slug
+        # The session itself has a session_id
+        session_meta = workspace.load_session(slug)
+        assert session_meta is not None
+        assert session_meta["session_id"].startswith("aqualib-")
 
     @pytest.mark.asyncio
     async def test_resumes_session_when_id_exists(self, tmp_path: Path):
         workspace = self._make_workspace(tmp_path)
         workspace.create_project(name="test")
-        workspace.update_project({"session_id": "aqualib-test-abc12345"})
+
+        # Create a session and mark it active so resume is attempted
+        session_meta = workspace.create_session(name="existing")
+        slug = session_meta["slug"]
+        session_id = session_meta["session_id"]
 
         mock_client = AsyncMock()
         mock_session = MagicMock()
@@ -194,18 +206,22 @@ class TestSessionManager:
             from aqualib.sdk.session_manager import SessionManager
 
             sm = SessionManager(mock_client, settings, workspace)
-            session = await sm.get_or_create_session()
+            result = await sm.get_or_create_session()
 
         mock_client.resume_session.assert_called_once()
         call_args = mock_client.resume_session.call_args
-        assert call_args[0][0] == "aqualib-test-abc12345"
-        assert session is mock_session
+        assert call_args[0][0] == session_id
+        sdk_session, returned_slug = result
+        assert sdk_session is mock_session
+        assert returned_slug == slug
 
     @pytest.mark.asyncio
     async def test_creates_new_session_when_resume_fails(self, tmp_path: Path):
         workspace = self._make_workspace(tmp_path)
         workspace.create_project(name="test")
-        workspace.update_project({"session_id": "aqualib-test-old"})
+
+        # Create an active session that will fail to resume
+        workspace.create_session(name="old-session")
 
         mock_client = AsyncMock()
         mock_session = MagicMock()
@@ -221,9 +237,10 @@ class TestSessionManager:
             from aqualib.sdk.session_manager import SessionManager
 
             sm = SessionManager(mock_client, settings, workspace)
-            session = await sm.get_or_create_session()
+            result = await sm.get_or_create_session()
 
         mock_client.create_session.assert_called_once()
+        session, slug = result
         assert session is mock_session
 
     def test_session_id_format(self, tmp_path: Path):

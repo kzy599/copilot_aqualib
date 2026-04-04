@@ -59,6 +59,10 @@ vendor_priority: true
 # RAG pipeline (optional — for workspace data/ indexing)
 # ---------------------------------------------------------------------------
 rag:
+  # Set to true to enable RAG semantic search (requires pip install aqualib[rag]).
+  # If false (default), workspace_search (keyword grep) is used instead.
+  enabled: false
+
   # API key for the embedding model.
   # Reads AQUALIB_RAG_API_KEY env var; falls back to OPENAI_API_KEY.
   api_key: ""

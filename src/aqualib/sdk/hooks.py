@@ -30,14 +30,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def build_hooks(settings: "Settings", workspace: "WorkspaceManager") -> dict:
+def build_hooks(
+    settings: "Settings",
+    workspace: "WorkspaceManager",
+    session_slug: str | None = None,
+) -> dict:
     """Build and return the complete hook dict for a Copilot SDK session."""
     return {
         "on_session_start": _make_session_start_hook(workspace),
-        "on_user_prompt_submitted": _make_prompt_hook(workspace),
+        "on_user_prompt_submitted": _make_prompt_hook(workspace, session_slug),
         "on_pre_tool_use": _make_pre_tool_hook(settings, workspace),
-        "on_post_tool_use": _make_post_tool_hook(workspace),
-        "on_session_end": _make_session_end_hook(workspace),
+        "on_post_tool_use": _make_post_tool_hook(workspace, session_slug),
+        "on_session_end": _make_session_end_hook(workspace, session_slug),
         "on_error_occurred": _make_error_hook(workspace),
     }
 
@@ -93,14 +97,17 @@ def _make_session_start_hook(workspace: "WorkspaceManager"):
     return on_session_start
 
 
-def _make_prompt_hook(workspace: "WorkspaceManager"):
+def _make_prompt_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_user_prompt_submitted(input_data: dict[str, Any], invocation: Any) -> None:
         """Record the user prompt to context_log for project memory."""
-        workspace.append_audit_entry({
+        entry: dict[str, Any] = {
             "event": "user_prompt",
             "query": input_data.get("prompt", ""),
             "timestamp": input_data.get("timestamp"),
-        })
+        }
+        if session_slug:
+            entry["session_slug"] = session_slug
+        workspace.append_audit_entry(entry)
         return None  # do not modify the prompt
 
     return on_user_prompt_submitted
@@ -144,23 +151,35 @@ def _make_pre_tool_hook(settings: "Settings", workspace: "WorkspaceManager"):
     return on_pre_tool_use
 
 
-def _make_post_tool_hook(workspace: "WorkspaceManager"):
+def _make_post_tool_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_post_tool_use(input_data: dict[str, Any], invocation: Any) -> None:
         """Record tool execution result to the audit trail."""
-        workspace.append_audit_entry({
+        entry: dict[str, Any] = {
             "event": "post_tool_use",
             "tool": input_data.get("toolName", ""),
             "success": not input_data.get("toolError"),
             "result_preview": str(input_data.get("toolResult", ""))[:300],
-        })
+        }
+        if session_slug:
+            entry["session_slug"] = session_slug
+        workspace.append_audit_entry(entry)
         return None
 
     return on_post_tool_use
 
 
-def _make_session_end_hook(workspace: "WorkspaceManager"):
+def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_session_end(input_data: dict[str, Any], invocation: Any) -> None:
-        """Flush and finalise the workspace state after the session ends."""
+        """Flush and finalise the workspace state after the session ends.
+
+        Also appends a compact executor memory entry for this task.
+        """
+        if session_slug:
+            workspace.append_agent_memory_entry(session_slug, "executor", {
+                "query": input_data.get("query", ""),
+                "skills_used": input_data.get("skills_used", []),
+                "output_preview": str(input_data.get("summary", ""))[:200],
+            })
         workspace.finalize_task()
         return None
 

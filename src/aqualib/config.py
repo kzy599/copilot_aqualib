@@ -71,6 +71,10 @@ class LLMSettings(BaseModel):
 class RAGSettings(BaseModel):
     """Settings for the LlamaIndex-backed RAG pipeline."""
 
+    enabled: bool = Field(
+        default=False,
+        description="Set to true to enable RAG semantic search. Requires pip install aqualib[rag].",
+    )
     api_key: str = Field(
         default="",
         description="Embedding API key (falls back to AQUALIB_RAG_API_KEY env var, then llm.api_key)",

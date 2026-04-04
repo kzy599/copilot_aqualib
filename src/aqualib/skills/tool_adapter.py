@@ -22,6 +22,41 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Pydantic models at module scope (required for get_type_hints in @define_tool)
+# ---------------------------------------------------------------------------
+
+try:
+    from pydantic import BaseModel
+    from pydantic import Field as PydanticField
+
+    class VendorSkillParams(BaseModel):
+        parameters: dict = PydanticField(
+            default_factory=dict,
+            description="Parameters to pass to the vendor skill CLI",
+        )
+
+    class SearchParams(BaseModel):
+        query: str = PydanticField(description="Search keywords to find in workspace data files")
+        max_results: int = PydanticField(default=5, description="Maximum results to return")
+
+    class ReadSkillParams(BaseModel):
+        skill_name: str = PydanticField(
+            description="Name of the vendor skill to read documentation for"
+        )
+        include_readme: bool = PydanticField(
+            default=False, description="Also read README.md and AGENTS.md if present"
+        )
+
+    class RAGSearchParams(BaseModel):
+        query: str = PydanticField(description="Semantic search query")
+        top_k: int = PydanticField(default=5, description="Number of results")
+
+except ImportError:
+    VendorSkillParams = None  # type: ignore[assignment,misc]
+    SearchParams = None  # type: ignore[assignment,misc]
+    ReadSkillParams = None  # type: ignore[assignment,misc]
+    RAGSearchParams = None  # type: ignore[assignment,misc]
 
 def build_tools_from_skills(settings: "Settings", workspace: "WorkspaceManager") -> list:
     """Scan all SKILL.md files and convert each vendor skill to a Copilot SDK tool.
@@ -41,6 +76,11 @@ def build_tools_from_skills(settings: "Settings", workspace: "WorkspaceManager")
     tools.append(_create_workspace_search_tool(workspace))
     tools.append(_create_read_skill_doc_tool(workspace, skill_metas))
 
+    # Auto-detect and register RAG tool if available
+    rag_tool = _maybe_create_rag_search_tool(settings, workspace)
+    if rag_tool is not None:
+        tools.append(rag_tool)
+
     logger.info("Built %d SDK tools (%d vendor + 2 utility)", len(tools), len(skill_metas))
     return tools
 
@@ -54,14 +94,6 @@ def _create_vendor_tool(meta: "SkillMeta", workspace: "WorkspaceManager") -> Any
     """Create a Copilot SDK tool for a single vendor skill."""
     try:
         from copilot import define_tool
-        from pydantic import BaseModel
-        from pydantic import Field as PydanticField
-
-        class VendorSkillParams(BaseModel):
-            parameters: dict = PydanticField(
-                default_factory=dict,
-                description="Parameters to pass to the vendor skill CLI",
-            )
 
         @define_tool(
             name=f"vendor_{meta.name}",
@@ -85,12 +117,6 @@ def _create_workspace_search_tool(workspace: "WorkspaceManager") -> Any:
     """Create a tool that searches workspace data/ for relevant files."""
     try:
         from copilot import define_tool
-        from pydantic import BaseModel
-        from pydantic import Field as PydanticField
-
-        class SearchParams(BaseModel):
-            query: str = PydanticField(description="Search keywords to find in workspace data files")
-            max_results: int = PydanticField(default=5, description="Maximum results to return")
 
         @define_tool(
             name="workspace_search",
@@ -128,16 +154,6 @@ def _create_read_skill_doc_tool(workspace: "WorkspaceManager", skill_metas: "lis
     """
     try:
         from copilot import define_tool
-        from pydantic import BaseModel
-        from pydantic import Field as PydanticField
-
-        class ReadSkillParams(BaseModel):
-            skill_name: str = PydanticField(
-                description="Name of the vendor skill to read documentation for"
-            )
-            include_readme: bool = PydanticField(
-                default=False, description="Also read README.md and AGENTS.md if present"
-            )
 
         @define_tool(
             name="read_skill_doc",
@@ -258,3 +274,67 @@ def _read_skill_documentation(
 def _make_stub_tool(name: str, description: str, fn: Any) -> dict:
     """Return a plain dict stub when the SDK is not installed (used in tests)."""
     return {"name": name, "description": description, "_fn": fn}
+
+
+# ---------------------------------------------------------------------------
+# RAG auto-detection and tool registration
+# ---------------------------------------------------------------------------
+
+
+def _maybe_create_rag_search_tool(settings: "Settings", workspace: "WorkspaceManager") -> Any:
+    """If RAG is configured and llama-index is installed, create a rag_search SDK tool."""
+    if not _is_rag_available(settings):
+        return None
+
+    try:
+        from copilot import define_tool
+
+        @define_tool(
+            name="rag_search",
+            description=(
+                "Semantic search over workspace data files using vector embeddings. "
+                "More powerful than workspace_search for conceptual queries. "
+                "Use when keyword search returns poor results."
+            ),
+        )
+        async def rag_search(params: RAGSearchParams) -> str:
+            return await _execute_rag_search(settings, workspace, params.query, params.top_k)
+
+        return rag_search
+    except ImportError:
+        return None
+
+
+def _is_rag_available(settings: "Settings") -> bool:
+    """Check if RAG dependencies are installed and configured."""
+    try:
+        import llama_index.core  # noqa: F401
+    except ImportError:
+        return False
+
+    rag = settings.rag
+    if rag.enabled:
+        return True
+    if rag.api_key or settings.llm.api_key:
+        return True
+    return False
+
+
+async def _execute_rag_search(
+    settings: "Settings", workspace: "WorkspaceManager", query: str, top_k: int
+) -> str:
+    """Execute a RAG query, automatically building/loading the index as needed."""
+    from aqualib.rag.indexer import RAGIndexer
+    from aqualib.rag.retriever import Retriever
+    from aqualib.skills.registry import SkillRegistry
+
+    empty_registry = SkillRegistry()
+    indexer = RAGIndexer(settings, empty_registry)
+    await indexer.load_or_build()
+
+    if indexer.index is None:
+        return "RAG index is empty — no documents to search."
+
+    retriever = Retriever(indexer.index, top_k=top_k)
+    results = await retriever.query_summaries(query)
+    return json.dumps(results, indent=2, ensure_ascii=False)
