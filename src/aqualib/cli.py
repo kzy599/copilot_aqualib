@@ -210,9 +210,31 @@ def init(
     # Write a starter config file if it doesn't exist
     cfg_path = Path("aqualib.yaml")
     if not cfg_path.exists():
-        import yaml
-
-        cfg_path.write_text(yaml.dump(settings.model_dump(mode="json"), default_flow_style=False, sort_keys=False))
+        cfg_template = (
+            f"llm:\n"
+            f"  api_key: \"\"              # defaults to OPENAI_API_KEY env var\n"
+            f"  base_url: null           # set for Azure, DeepSeek, Ollama, etc."
+            f" Also reads AQUALIB_LLM_BASE_URL / OPENAI_BASE_URL\n"
+            f"  model: {settings.llm.model}\n"
+            f"  temperature: {settings.llm.temperature}\n"
+            f"  max_tokens: {settings.llm.max_tokens}\n"
+            f"\n"
+            f"rag:\n"
+            f"  api_key: \"\"              # defaults to AQUALIB_RAG_API_KEY env var,"
+            f" then falls back to llm.api_key\n"
+            f"  base_url: null           # defaults to AQUALIB_RAG_BASE_URL env var,"
+            f" then falls back to llm.base_url\n"
+            f"  chunk_size: {settings.rag.chunk_size}\n"
+            f"  chunk_overlap: {settings.rag.chunk_overlap}\n"
+            f"  similarity_top_k: {settings.rag.similarity_top_k}\n"
+            f"  embed_model: {settings.rag.embed_model}\n"
+            f"\n"
+            f"vendor_priority: {str(settings.vendor_priority).lower()}\n"
+            f"\n"
+            f"directories:\n"
+            f"  base: ./aqualib_workspace\n"
+        )
+        cfg_path.write_text(cfg_template)
         rprint(f"[green]✅ Config written → {cfg_path}[/green]")
 
     rprint(f"[green]✅ Workspace initialised at {settings.directories.base}[/green]")
