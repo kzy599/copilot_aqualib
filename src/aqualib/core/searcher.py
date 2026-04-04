@@ -45,8 +45,8 @@ class SearcherAgent(BaseAgent):
         self,
         settings: "Settings",
         retriever: "Retriever",
-        registry: "SkillRegistry" = None,
-        workspace: "WorkspaceManager" = None,
+        registry: "SkillRegistry | None" = None,
+        workspace: "WorkspaceManager | None" = None,
     ) -> None:
         super().__init__(settings)
         self.retriever = retriever
@@ -66,7 +66,7 @@ class SearcherAgent(BaseAgent):
             return task
 
         # --- Fallback discovery (no RAG results) ---
-        task.add_message(self.role, "No RAG context available \u2013 activating fallback discovery.")
+        task.add_message(self.role, "No RAG context available -- activating fallback discovery.")
 
         fallback_context: list[dict] = []
 
@@ -87,7 +87,7 @@ class SearcherAgent(BaseAgent):
                 fallback_context.extend(skill_briefs)
                 task.add_message(
                     self.role,
-                    f"Fallback Tier 1 \u2013 Registry match: {len(skill_briefs)} candidate skill(s) found.",
+                    f"Fallback Tier 1 -- Registry match: {len(skill_briefs)} candidate skill(s) found.",
                 )
 
         # Tier 2: Workspace file scanning (grep)
@@ -99,7 +99,7 @@ class SearcherAgent(BaseAgent):
                 )
                 task.add_message(
                     self.role,
-                    f"Fallback Tier 2 \u2013 File scan: {len(file_hits)} file(s) matched keywords.",
+                    f"Fallback Tier 2 -- File scan: {len(file_hits)} file(s) matched keywords.",
                 )
 
         # Tier 3: LLM synthesis (only if we found anything)
