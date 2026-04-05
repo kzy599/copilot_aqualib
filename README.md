@@ -279,14 +279,16 @@ All commands accept `--base-dir` (`-d`) and `--verbose` (`-v`).
 ```text
 ┌─────────────────────────────────────────────┐
 │              Copilot SDK (Parent Agent)      │
-│  Receives user input → decides routing      │
+│  Receives user input → formulates plan      │
+│  → calls write_plan → delegates to agents   │
 ├──────────────┬──────────────────────────────┤
 │              │                              │
 │   ┌──────────▼──────────┐  ┌───────────────▼──────────┐
 │   │     Executor        │  │       Reviewer            │
 │   │  (custom sub-agent) │  │   (custom sub-agent)      │
 │   │                     │  │                            │
-│   │  Tools:             │  │  Reads executor output,    │
+│   │  Reads plan.md      │  │  Reads plan.md, verifies   │
+│   │  Tools:             │  │  executor followed plan,   │
 │   │  • vendor_<name>    │  │  checks VENDOR_PRIORITY,   │
 │   │  • workspace_search │  │  writes verdict + audit.   │
 │   │  • read_skill_doc   │  │                            │
@@ -294,10 +296,13 @@ All commands accept `--base-dir` (`-d`) and `--verbose` (`-v`).
 │   └─────────────────────┘  └────────────────────────────┘
 │                                                         │
 │  SDK built-in tools: file editing, terminal, search     │
+│  AquaLib tools: write_plan, workspace_search, etc.      │
 └─────────────────────────────────────────────────────────┘
 ```
 
-The Parent Agent (SDK built-in) decides whether to answer directly, delegate to the Executor, or invoke the Reviewer. AquaLib registers custom tools (`vendor_*`, `workspace_search`, `read_skill_doc`, `rag_search`) and hooks (`on_pre_tool_use`, `on_post_tool_use`, `on_error`) alongside the SDK's built-in capabilities.
+The Parent Agent follows a **Plan-First workflow**: when a task involves tool execution, it first presents an execution plan (Goal, Data, Steps, Expected Output), then calls `write_plan` to persist the plan to `sessions/<slug>/plan.md` before delegating to sub-agents. The Executor and Reviewer both read `plan.md` at the start of their work. For pure knowledge questions, the plan is skipped entirely.
+
+AquaLib registers custom tools (`vendor_*`, `workspace_search`, `read_skill_doc`, `write_plan`, `rag_search`) and hooks (`on_pre_tool_use`, `on_post_tool_use`, `on_error`) alongside the SDK's built-in capabilities.
 
 ## Vendor Skill Ecosystem
 

@@ -57,11 +57,20 @@ try:
         query: str = PydanticField(description="Semantic search query")
         top_k: int = PydanticField(default=5, description="Number of results")
 
+    class WritePlanParams(BaseModel):
+        plan: str = PydanticField(
+            description=(
+                "The execution plan in Markdown format. Should include: "
+                "Goal, Data, Steps (ordered), and Expected Output."
+            )
+        )
+
 except ImportError:
     VendorSkillParams = None  # type: ignore[assignment,misc]
     SearchParams = None  # type: ignore[assignment,misc]
     ReadSkillParams = None  # type: ignore[assignment,misc]
     RAGSearchParams = None  # type: ignore[assignment,misc]
+    WritePlanParams = None  # type: ignore[assignment,misc]
 
 def build_tools_from_skills(
     settings: "Settings",
@@ -84,13 +93,14 @@ def build_tools_from_skills(
 
     tools.append(_create_workspace_search_tool(workspace))
     tools.append(_create_read_skill_doc_tool(workspace, skill_metas))
+    tools.append(_create_write_plan_tool(workspace, session_slug))
 
     # Auto-detect and register RAG tool if available
     rag_tool = _maybe_create_rag_search_tool(settings, workspace)
     if rag_tool is not None:
         tools.append(rag_tool)
 
-    logger.info("Built %d SDK tools (%d vendor + 2 utility)", len(tools), len(skill_metas))
+    logger.info("Built %d SDK tools (%d vendor + 3 utility)", len(tools), len(skill_metas))
     return tools
 
 
@@ -191,6 +201,58 @@ def _create_read_skill_doc_tool(workspace: "WorkspaceManager", skill_metas: "lis
                 params.get("include_readme", False),
             ),
         )
+
+
+def _create_write_plan_tool(workspace: "WorkspaceManager", session_slug: str | None = None) -> Any:
+    """Create a tool that writes the task execution plan to the session directory.
+
+    The plan is written to ``sessions/<slug>/plan.md`` and can be read by
+    executor and reviewer agents via the built-in ``read_file`` tool.
+    """
+    try:
+        from copilot import define_tool
+
+        @define_tool(
+            name="write_plan",
+            description=(
+                "Write the task execution plan to the session's plan.md file. "
+                "MUST be called before delegating to executor or reviewer agents. "
+                "The plan should include: Goal, Data, Steps, and Expected Output."
+            ),
+            skip_permission=True,
+        )
+        async def write_plan(params: WritePlanParams) -> str:
+            return _write_plan_to_session(workspace, session_slug, params.plan)
+
+        return write_plan
+
+    except ImportError:
+        return _make_stub_tool(
+            name="write_plan",
+            description="Write task execution plan to session plan.md.",
+            fn=lambda params: _write_plan_to_session(
+                workspace, session_slug, params.get("plan", ""),
+            ),
+        )
+
+
+def _write_plan_to_session(
+    workspace: "WorkspaceManager",
+    session_slug: str | None,
+    plan_content: str,
+) -> str:
+    """Write plan.md to the session directory. Returns the file path for reference."""
+    if not session_slug:
+        # Fallback: write to workspace root if no session
+        plan_path = workspace.dirs.base / "plan.md"
+    else:
+        plan_dir = workspace.session_dir(session_slug)
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        plan_path = plan_dir / "plan.md"
+
+    plan_path.write_text(plan_content, encoding="utf-8")
+    logger.info("Plan written → %s", plan_path)
+    return f"Plan saved to {plan_path}. Executor and reviewer will read this file."
 
 
 # ---------------------------------------------------------------------------

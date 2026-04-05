@@ -88,8 +88,8 @@ class TestBuildToolsFromSkills:
         with patch("aqualib.skills.scanner.scan_all_skill_dirs", return_value=skill_metas):
             tools = build_tools_from_skills(settings, workspace)
 
-        # 2 vendor tools + 2 utility tools = 4
-        assert len(tools) == 4
+        # 2 vendor tools + 3 utility tools = 5
+        assert len(tools) == 5
 
     def test_vendor_tool_name_prefixed(self, settings, workspace, tmp_path):
         vendor_dir = tmp_path / "skills" / "vendor"
