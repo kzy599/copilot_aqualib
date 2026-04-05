@@ -51,6 +51,10 @@ def _save_reviewer_memory(
     # Warn when the output doesn't match the expected reviewer format at all
     if not verdict_match:
         logger.warning("Reviewer memory: could not parse VERDICT from result text")
+    if not vendor_match:
+        logger.debug("Reviewer memory: could not parse VENDOR_PRIORITY from result text")
+    if not quality_match:
+        logger.debug("Reviewer memory: could not parse PLAN_QUALITY from result text")
 
     entry: dict[str, Any] = {
         "verdict": verdict_match.group(1).strip() if verdict_match else "unknown",

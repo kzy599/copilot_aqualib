@@ -102,11 +102,14 @@ class WorkspaceManager:
             canonical_dir.mkdir(parents=True, exist_ok=True)
 
             # Aggregated view: symlink in work/<slug>/inv_NNNN → canonical
+            # Use a relative path so the symlink remains valid if the workspace is moved.
             link_parent = self.dirs.work / session_slug
             link_parent.mkdir(parents=True, exist_ok=True)
             link_path = link_parent / f"inv_{counter:04d}"
             try:
-                link_path.symlink_to(canonical_dir)
+                import os
+                rel_target = Path(os.path.relpath(canonical_dir, link_parent))
+                link_path.symlink_to(rel_target)
             except (OSError, NotImplementedError):
                 # Symlinks not supported on this system; log and continue
                 logger.debug(
@@ -191,11 +194,14 @@ class WorkspaceManager:
             logger.info("SDK vendor trace saved → %s", canonical_path)
 
             # Aggregated view: symlink in results/vendor_traces/ → canonical
+            # Use a relative path so the symlink remains valid if the workspace is moved.
             global_dir = self.dirs.vendor_traces
             global_dir.mkdir(parents=True, exist_ok=True)
             link_path = global_dir / filename
             try:
-                link_path.symlink_to(canonical_path)
+                import os
+                rel_target = Path(os.path.relpath(canonical_path, global_dir))
+                link_path.symlink_to(rel_target)
             except (OSError, NotImplementedError):
                 # Fall back to a copy on systems without symlink support
                 logger.debug(
@@ -649,11 +655,14 @@ class WorkspaceManager:
         session_results = self.session_results_dir(slug)
         results_slug_dir = self.dirs.results / slug
         results_slug_dir.mkdir(parents=True, exist_ok=True)
+        import os
         for item in session_results.iterdir():
             link = results_slug_dir / item.name
             if not link.exists() and not link.is_symlink():
                 try:
-                    link.symlink_to(item)
+                    # Use a relative path so the symlink remains valid if the workspace is moved.
+                    rel_target = Path(os.path.relpath(item, results_slug_dir))
+                    link.symlink_to(rel_target)
                 except (OSError, NotImplementedError):
                     logger.debug(
                         "Symlink not supported; aggregated result at %s will be absent", link
