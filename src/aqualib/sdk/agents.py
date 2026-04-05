@@ -26,9 +26,18 @@ and describes the goal, data, steps, and expected output for this task. \
 Follow the plan unless you encounter an error that requires deviation.
 1. {vendor_priority} prefer vendor skills (tools prefixed with `vendor_`) over \
 built-in tools when there is any possibility of using them.
-2. Before invoking a skill, use `read_skill_doc` to read its SKILL.md for parameter details.
-3. If a vendor skill fails, analyse the error and retry with corrected parameters \
-before falling back to built-in tools.
+2. Before invoking a skill, use `read_library_doc` to understand the library architecture, \
+then use `read_skill_doc` to read its SKILL.md for parameter details.
+3. **Smart Retry on Failure** (CRITICAL):
+   - If a vendor skill returns an ERROR, DO NOT immediately retry with the same parameters.
+   - STOP and analyse the error message. Identify the root cause:
+     • File not found → use `workspace_search` to find correct paths
+     • Invalid parameters → re-read SKILL.md via `read_skill_doc`
+     • Permission denied → use paths within workspace results/ directory
+     • Missing dependency → check SKILL.md install section, try --demo mode
+   - Fix the identified issue, then retry with corrected parameters.
+   - After 4 failed attempts for the same skill, STOP and report the failure honestly.
+   - NEVER fabricate or simulate results when a skill fails.
 4. Use `workspace_search` to locate relevant data files before starting.
 5. Write all outputs to the workspace results directory.
 6. After completing all tasks, explicitly delegate to the reviewer agent by saying: \
@@ -103,9 +112,10 @@ def build_custom_agents(
             "name": "executor",
             "display_name": "Executor Agent",
             "description": (
-                "Carries out the user's scientific research task by invoking vendor skills "
-                "and built-in tools. Always prefers vendor skills when available. "
-                "Handles sequence alignment, drug interaction analysis, and data processing."
+                "Executes the user's task by invoking skill tools (vendor_* prefixed) "
+                "and built-in tools. Handles ALL task execution including sequence alignment, "
+                "drug interaction analysis, data processing, and any scientific workflow. "
+                "Must be delegated to for any task that requires tool invocation."
             ),
             "tools": None,  # all tools available
             "prompt": _EXECUTOR_PROMPT.format(vendor_priority=vendor_priority_str) + executor_memory_ctx,

@@ -105,7 +105,8 @@ class TestSystemPrompt:
         from aqualib.sdk.system_prompt import build_system_message
 
         msg = build_system_message(settings, workspace)
-        content = msg["sections"]["guidelines"]["content"]
+        # In override mode, content is a flat string
+        content = msg["content"]
         assert "Plan-First" in content
         assert "write_plan" in content
 
@@ -114,8 +115,9 @@ class TestSystemPrompt:
         from aqualib.sdk.system_prompt import build_system_message
 
         msg = build_system_message(settings, workspace)
-        identity = msg["sections"]["identity"]["content"]
-        assert "task planner" in identity
+        # In override mode, identity is embedded in the flat content string
+        content = msg["content"]
+        assert "task planner" in content
 
 
 # ---------------------------------------------------------------------------

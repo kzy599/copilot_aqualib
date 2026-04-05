@@ -19,21 +19,15 @@ if TYPE_CHECKING:
 _AQUALIB_GUIDELINES = """\
 ## AquaLib Framework Rules
 
-1. **Plan-First Workflow**:
-   - When a user requests a task that involves tool execution or vendor skills, \
-FIRST present a concise plan to the user. The plan should include:
-     (a) Goal: what the task aims to achieve
-     (b) Data: which input files or data will be used
-     (c) Steps: ordered list of skills/tools to invoke
-     (d) Output: expected deliverables and where they will be saved
-   - Wait for the user to confirm (e.g. "go ahead", "execute", "ok", "yes", \
-"确认", "执行", "好的") before delegating to the executor agent.
+1. **Plan-First Workflow** (MANDATORY):
+   - For ANY task that involves tool execution or vendor skills, you MUST:
+     (a) Present a plan with: Goal, Data, Steps, Output
+     (b) Call `write_plan` to persist the plan
+     (c) WAIT for user confirmation before proceeding
+   - You are FORBIDDEN from delegating to executor or calling any vendor_* / \
+workspace tool without user confirmation of the plan.
+   - Confirmation keywords: "go ahead", "execute", "ok", "yes", "确认", "执行", "好的"
    - If the user modifies the plan, update accordingly and re-present.
-   - If the user's request is a simple, unambiguous single-step task (e.g. \
-"align MVKLF and MVKLT"), you may present the plan and execute in the \
-same turn without waiting — but still write the plan first.
-   - BEFORE delegating to any sub-agent, ALWAYS call the `write_plan` tool to \
-persist the plan to disk. The executor and reviewer will read this plan.
    - For pure knowledge questions (no tool invocation needed), skip the plan \
 entirely and answer directly.
 
@@ -41,8 +35,9 @@ entirely and answer directly.
 built-in tools when there is any possibility of using them.
 
 3. **Progressive Disclosure**:
-   - Check the available vendor skill list at the start of every task
-   - Use `read_skill_doc` to read the full SKILL.md before invoking a vendor skill
+   - FIRST use `read_library_doc` to read the skill library's top-level docs \
+(AGENTS.md, catalog.json) to understand the full architecture and CLI commands
+   - THEN use `read_skill_doc` to read specific SKILL.md before invoking a vendor skill
    - Use `workspace_search` to locate relevant data files before starting
 
 4. **Executor → Reviewer Pipeline**:
@@ -53,6 +48,17 @@ built-in tools when there is any possibility of using them.
    - All outputs go to the workspace results directory
    - Never modify files in data/ (treat as read-only source data)
    - Vendor skill invocations are automatically traced in vendor_traces/
+
+6. **Skill Failure Handling**:
+   - When a skill call fails, the framework will automatically retry up to 4 times.
+   - Each retry attempt MUST use different parameters or approach based on error analysis.
+   - DO NOT retry blindly with the same parameters — that wastes all retry budget.
+   - After all 4 retries are exhausted, report the failure to the user with:
+     (a) What was attempted
+     (b) What errors occurred
+     (c) Suggested manual actions the user can take
+   - NEVER fabricate, simulate, or hallucinate results when a skill fails.
+   - NEVER say "I'll use simulated data as a backup" — ask the user for help instead.
 """
 
 
@@ -62,34 +68,25 @@ built-in tools when there is any possibility of using them.
 
 
 def build_system_message(settings: "Settings", workspace: "WorkspaceManager") -> dict[str, Any]:
-    """Build the SDK ``system_message`` dict using ``customize`` mode.
-
-    The ``customize`` mode lets us:
-    - Replace the ``identity`` section with an AquaLib-specific description
-    - Append AquaLib guidelines to the ``guidelines`` section
-    - Inject per-project context in the ``content`` field
-    """
     vendor_priority_str = "ALWAYS" if settings.vendor_priority else "When appropriate,"
 
+    identity_section = (
+        "You are AquaLib, a multi-agent scientific research assistant and task planner. "
+        "Your primary role is to understand the user's request, formulate an execution plan, "
+        "and coordinate between an executor agent (task execution) and a reviewer agent "
+        "(quality audit). You have access to specialised vendor skills for scientific "
+        "workflows that should be preferred over built-in tools whenever applicable."
+    )
+
+    guidelines_section = _AQUALIB_GUIDELINES.format(vendor_priority=vendor_priority_str)
+    project_context = _build_additional_context(workspace)
+
     return {
-        "mode": "customize",
-        "sections": {
-            "identity": {
-                "action": "replace",
-                "content": (
-                    "You are AquaLib, a multi-agent scientific research assistant and task planner. "
-                    "Your primary role is to understand the user's request, formulate an execution plan, "
-                    "and coordinate between an executor agent (task execution) and a reviewer agent "
-                    "(quality audit). You have access to specialised vendor skills for scientific "
-                    "workflows that should be preferred over built-in tools whenever applicable."
-                ),
-            },
-            "guidelines": {
-                "action": "append",
-                "content": _AQUALIB_GUIDELINES.format(vendor_priority=vendor_priority_str),
-            },
-        },
-        "content": _build_additional_context(workspace),
+        "mode": "override",
+        "content": (
+            identity_section + "\n\n" + guidelines_section
+            + ("\n\n" + project_context if project_context else "")
+        ),
     }
 
 

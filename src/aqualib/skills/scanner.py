@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 class SkillMeta:
     """Lightweight metadata for a single vendor skill discovered from SKILL.md."""
 
-    __slots__ = ("name", "description", "tags", "version", "parameters_schema", "skill_dir", "vendor_root")
+    __slots__ = (
+        "name", "description", "tags", "version", "parameters_schema",
+        "skill_dir", "vendor_root", "library_name",
+    )
 
     def __init__(
         self,
@@ -42,6 +45,7 @@ class SkillMeta:
         parameters_schema: dict[str, Any],
         skill_dir: Path,
         vendor_root: Path,
+        library_name: str = "",
     ) -> None:
         self.name = name
         self.description = description
@@ -50,6 +54,7 @@ class SkillMeta:
         self.parameters_schema = parameters_schema
         self.skill_dir = skill_dir
         self.vendor_root = vendor_root
+        self.library_name = library_name
 
     def __repr__(self) -> str:
         return f"SkillMeta(name={self.name!r}, tags={self.tags!r})"
@@ -125,31 +130,32 @@ def _load_meta_from_md(md_file: Path, *, vendor_root: Path) -> SkillMeta | None:
 
 
 def scan_all_skill_dirs(settings: "Settings", workspace: "WorkspaceManager") -> list[SkillMeta]:
-    """Scan all skill directories and return a deduplicated list of :class:`SkillMeta`.
+    """Scan all skill directories and return a deduplicated list of SkillMeta.
 
     Three-tier priority (highest → lowest):
-    1. ``workspace/skills/vendor/``  – per-project customisation
-    2. ``<repo>/vendor/*/``          – repo-shipped submodule libraries
+    1. ``<repo>/vendor/*/``          – repo-shipped submodule libraries (HIGHEST)
+    2. ``workspace/skills/vendor/``  – per-project customisation
     3. Internal ``skills/`` directory (not used by scanner, handled elsewhere)
 
     Skills with duplicate names are resolved in priority order (first wins).
     """
     seen: dict[str, SkillMeta] = {}
 
-    # Tier 1: workspace per-project vendor mount
-    ws_vendor = workspace.dirs.skills_vendor
-    if ws_vendor.exists():
-        for meta in scan_skill_directory(ws_vendor):
-            if meta.name not in seen:
-                seen[meta.name] = meta
-
-    # Tier 2: repo vendor/ submodule libraries
+    # Tier 1: repo vendor/ submodule libraries (HIGHEST PRIORITY)
     repo_vendor = Path(__file__).resolve().parent.parent.parent.parent / "vendor"
     if repo_vendor.is_dir():
         for lib_dir in sorted(repo_vendor.iterdir()):
             if lib_dir.is_dir() and any(lib_dir.rglob("SKILL.md")):
                 for meta in scan_skill_directory(lib_dir):
                     if meta.name not in seen:
+                        meta.library_name = lib_dir.name
                         seen[meta.name] = meta
+
+    # Tier 2: workspace per-project vendor mount
+    ws_vendor = workspace.dirs.skills_vendor
+    if ws_vendor.exists():
+        for meta in scan_skill_directory(ws_vendor):
+            if meta.name not in seen:
+                seen[meta.name] = meta
 
     return list(seen.values())

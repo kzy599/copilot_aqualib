@@ -35,7 +35,8 @@ class TestSessionStartHook:
 
         hook = _make_session_start_hook(workspace)
         result = await hook({}, None)
-        assert result is None
+        # With library-level doc injection, result may be non-None when vendor dirs exist.
+        assert result is None or isinstance(result, dict)
 
     @pytest.mark.asyncio
     async def test_returns_project_name(self, workspace: WorkspaceManager):

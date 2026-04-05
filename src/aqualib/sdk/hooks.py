@@ -16,6 +16,7 @@ on_error_occurred     | retry / skip strategy for vendor skill errors
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -88,6 +89,25 @@ def _make_session_start_hook(workspace: "WorkspaceManager"):
                 )
         except Exception:
             logger.debug("Could not load vendor skills for session context.", exc_info=True)
+
+        # Library-level documentation (progressive disclosure Level 0)
+        repo_vendor = Path(__file__).resolve().parent.parent.parent.parent / "vendor"
+        if repo_vendor.is_dir():
+            lib_dirs = [d for d in sorted(repo_vendor.iterdir()) if d.is_dir()]
+            for lib_dir in lib_dirs:
+                for doc_name in ("llms.txt", "AGENTS.md"):
+                    doc = lib_dir / doc_name
+                    if doc.exists():
+                        context_parts.append(
+                            f"\n## Library: {lib_dir.name}\n"
+                            f"{doc.read_text(encoding='utf-8')[:500]}"
+                        )
+                        break
+            if lib_dirs:
+                context_parts.append(
+                    "\nUse 'read_library_doc' tool for full library documentation "
+                    "before reading individual SKILL.md files."
+                )
 
         if not context_parts:
             return None
@@ -180,44 +200,116 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
     return on_session_end
 
 
+def _build_rethink_hint(error_context: str, error_msg: str, attempt: int, max_attempts: int) -> str:
+    """Generate a structured rethink hint for the agent based on error patterns."""
+    error_lower = error_msg.lower()
+
+    if "permission denied" in error_lower:
+        fix_suggestion = (
+            "The tool was denied file access. Before retrying:\n"
+            "1. Use `workspace_search` to find accessible file paths\n"
+            "2. Ensure output paths are within the workspace results/ directory\n"
+            "3. Check that input files exist in workspace data/"
+        )
+    elif "no such file" in error_lower or "not found" in error_lower:
+        fix_suggestion = (
+            "A file or directory was not found. Before retrying:\n"
+            "1. Use `workspace_search` to verify correct file paths\n"
+            "2. Check for typos in file names\n"
+            "3. Ensure the data directory exists and contains expected files"
+        )
+    elif "import" in error_lower or "module" in error_lower:
+        fix_suggestion = (
+            "A Python dependency is missing. Before retrying:\n"
+            "1. Read the SKILL.md to check required packages\n"
+            "2. Consider using the --demo flag if available\n"
+            "3. Try an alternative skill that doesn't require this dependency"
+        )
+    elif "timeout" in error_lower:
+        fix_suggestion = (
+            "The operation timed out. Before retrying:\n"
+            "1. Try with a smaller input dataset\n"
+            "2. Check if the skill supports chunked processing\n"
+            "3. Consider increasing timeout or using a subset of data"
+        )
+    elif "invalid" in error_lower and ("param" in error_lower or "arg" in error_lower):
+        fix_suggestion = (
+            "Parameters were invalid. Before retrying:\n"
+            "1. Use `read_skill_doc` to read the correct parameter schema\n"
+            "2. Verify parameter types (string vs int vs path)\n"
+            "3. Check required vs optional parameters"
+        )
+    else:
+        fix_suggestion = (
+            "An unexpected error occurred. Before retrying:\n"
+            "1. Use `read_skill_doc` to re-read the skill's documentation\n"
+            "2. Verify all input parameters and file paths\n"
+            "3. Try with different parameters or the --demo flag"
+        )
+
+    return (
+        f"🔄 RETRY ATTEMPT {attempt}/{max_attempts} — RETHINK REQUIRED\n\n"
+        f"Error: {error_msg[:300]}\n\n"
+        f"Analysis & Fix Suggestions:\n{fix_suggestion}\n\n"
+        f"IMPORTANT: Do NOT retry with the exact same parameters. "
+        f"Analyse the error, adjust your approach, then try again."
+    )
+
+
 def _make_error_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
-    _vendor_retry_counts: dict[str, int] = {}
-    _MAX_VENDOR_RETRIES = 2
+    _retry_counts: dict[str, int] = {}
+    _MAX_RETRIES = 4  # Aligned with tool_adapter's _MAX_SKILL_RETRIES
 
     async def on_error_occurred(
         input_data: dict[str, Any], invocation: Any
-    ) -> dict[str, str]:
-        """Error handling strategy.
+    ) -> dict[str, Any]:
+        """Error handling with rethink guidance.
 
-        - Vendor skill failure → retry up to _MAX_VENDOR_RETRIES times
-        - All other errors    → skip and let the agent try another approach
+        - Any tool failure → retry up to _MAX_RETRIES times with error analysis
+        - Each retry includes additionalContext with rethink hints
+        - After all retries exhausted → skip with user-facing summary
         """
         error_context = input_data.get("errorContext", "")
         error_msg = input_data.get("error", "")
+        error_context_str = str(error_context)
+        error_msg_str = str(error_msg)[:500]
 
         entry: dict[str, Any] = {
             "event": "error",
-            "context": error_context,
-            "error": str(error_msg)[:500],
+            "context": error_context_str,
+            "error": error_msg_str,
         }
         if session_slug:
             entry["session_slug"] = session_slug
         workspace.append_audit_entry(entry)
 
-        error_context_str = str(error_context)
-        if "vendor_" in error_context_str:
-            count = _vendor_retry_counts.get(error_context_str, 0) + 1
-            _vendor_retry_counts[error_context_str] = count
-            if count <= _MAX_VENDOR_RETRIES:
-                logger.info("Vendor error retry %d/%d for %s", count, _MAX_VENDOR_RETRIES, error_context_str)
-                return {"errorHandling": "retry"}
-            else:
-                logger.warning(
-                    "Vendor retries exhausted (%d) for %s – skipping.", _MAX_VENDOR_RETRIES, error_context_str
-                )
-                _vendor_retry_counts.pop(error_context_str, None)
-                return {"errorHandling": "skip"}
+        retry_key = f"{error_context_str}:{error_msg_str[:100]}"
+        count = _retry_counts.get(retry_key, 0) + 1
+        _retry_counts[retry_key] = count
 
-        return {"errorHandling": "skip"}
+        if count <= _MAX_RETRIES:
+            logger.info(
+                "Error retry %d/%d for %s: %s",
+                count, _MAX_RETRIES, error_context_str, error_msg_str[:200],
+            )
+            rethink_hint = _build_rethink_hint(error_context_str, error_msg_str, count, _MAX_RETRIES)
+            return {
+                "errorHandling": "retry",
+                "additionalContext": rethink_hint,
+            }
+        else:
+            logger.warning(
+                "Retries exhausted (%d) for %s – skipping.",
+                _MAX_RETRIES, error_context_str,
+            )
+            _retry_counts.pop(retry_key, None)
+            return {
+                "errorHandling": "skip",
+                "additionalContext": (
+                    f"⚠️ All {_MAX_RETRIES} retry attempts failed for '{error_context_str}'. "
+                    f"Last error: {error_msg_str[:200]}. "
+                    f"Report this failure to the user honestly. Do NOT fabricate results."
+                ),
+            }
 
     return on_error_occurred
