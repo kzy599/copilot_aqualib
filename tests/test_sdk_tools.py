@@ -213,6 +213,66 @@ class TestReadSkillDocTool:
 
 
 # ---------------------------------------------------------------------------
+# read_library_doc — _read_library_documentation
+# ---------------------------------------------------------------------------
+
+
+class TestReadLibraryDoc:
+    def test_reads_all_md_and_txt_in_root(self, tmp_path: Path):
+        """doc_type='all' picks up ALL .md/.txt files (including CLAUDE.md),
+        not just the 4 hardcoded ones, plus skills/catalog.json."""
+        from unittest.mock import patch
+
+        from aqualib.skills.tool_adapter import _read_library_documentation
+
+        # Build a fake library directory
+        lib_dir = tmp_path / "vendor" / "TestLib"
+        lib_dir.mkdir(parents=True)
+        (lib_dir / "README.md").write_text("# README content")
+        (lib_dir / "AGENTS.md").write_text("# AGENTS content")
+        (lib_dir / "CLAUDE.md").write_text("# CLAUDE skill map")
+        (lib_dir / "llms.txt").write_text("llms summary")
+        (lib_dir / "CONTRIBUTING.md").write_text("# Contributing guide")
+        # Non-doc files should be ignored
+        (lib_dir / "setup.py").write_text("ignored")
+        (lib_dir / "clawbio.py").write_text("ignored")
+
+        skills_dir = lib_dir / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "catalog.json").write_text('{"skills": []}')
+
+        # Patch __file__ resolution so repo_vendor points to tmp_path/vendor
+        # _read_library_documentation uses:
+        #   Path(__file__).resolve().parent.parent.parent.parent / "vendor"
+        # We create a fake __file__ path such that .parent^4 / "vendor" = tmp_path / "vendor"
+        fake_file = tmp_path / "src" / "aqualib" / "skills" / "tool_adapter.py"
+        fake_file.parent.mkdir(parents=True, exist_ok=True)
+        fake_file.touch()
+
+        with patch("aqualib.skills.tool_adapter.__file__", str(fake_file)):
+            result = _read_library_documentation("TestLib", "all")
+
+        # All .md and .txt files should be present
+        assert "AGENTS content" in result
+        assert "CLAUDE skill map" in result
+        assert "README content" in result
+        assert "llms summary" in result
+        assert "Contributing guide" in result
+        assert "catalog.json" in result
+        # Non-doc files (.py) should NOT be present
+        assert "ignored" not in result
+
+    def test_not_found(self):
+        from unittest.mock import patch
+
+        from aqualib.skills.tool_adapter import _read_library_documentation
+
+        with patch("aqualib.skills.tool_adapter.__file__", "/nonexistent/src/aqualib/skills/ta.py"):
+            result = _read_library_documentation("NoSuchLib", "all")
+        assert "not found" in result
+
+
+# ---------------------------------------------------------------------------
 # VendorSkillParams - command field
 # ---------------------------------------------------------------------------
 

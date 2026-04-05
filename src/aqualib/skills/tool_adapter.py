@@ -262,10 +262,12 @@ def _create_read_library_doc_tool() -> Any:
         @define_tool(
             name="read_library_doc",
             description=(
-                "Read the top-level documentation of a vendor skill library "
-                "(AGENTS.md, README.md, catalog.json, llms.txt). Use this FIRST to "
-                "understand the library's architecture, CLI commands, and skill map "
-                "BEFORE reading individual SKILL.md files."
+                "Read top-level documentation of a vendor skill library. "
+                "When doc_type='all' (default), reads ALL .md and .txt files in the "
+                "library root (AGENTS.md, CLAUDE.md, README.md, llms.txt, etc.) plus "
+                "skills/catalog.json. Use this FIRST to understand the library's "
+                "architecture, CLI commands, and skill map BEFORE reading individual "
+                "SKILL.md files."
             ),
             skip_permission=True,
         )
@@ -307,13 +309,15 @@ def _read_library_documentation(library_name: str, doc_type: str) -> str:
             return f"Document '{doc_type}' not found for library '{library_name}'."
         return doc_path.read_text(encoding="utf-8")[:_MAX_DOC_LENGTH]
 
-    # doc_type == "all": concatenate in order, truncate total to _MAX_DOC_LENGTH chars
+    # doc_type == "all": scan all .md/.txt files in root + skills/catalog.json
     parts: list[str] = []
-    order = ["llms_txt", "agents_md", "readme", "catalog"]
-    for key in order:
-        path = _DOC_FILES[key]
-        if path.exists():
-            parts.append(f"# {path.name}\n\n{path.read_text(encoding='utf-8')}")
+    for f in sorted(lib_dir.iterdir()):
+        if f.is_file() and f.suffix in (".md", ".txt"):
+            parts.append(f"# {f.name}\n\n{f.read_text(encoding='utf-8')}")
+    # Also include skills/catalog.json if present
+    catalog = lib_dir / "skills" / "catalog.json"
+    if catalog.exists():
+        parts.append(f"# catalog.json\n\n{catalog.read_text(encoding='utf-8')}")
 
     combined = "\n\n".join(parts)
     return combined[:_MAX_DOC_LENGTH]
