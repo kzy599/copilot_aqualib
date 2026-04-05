@@ -123,7 +123,11 @@ class SessionManager:
     async def _resume_sdk_session(self, session_id: str, slug: str) -> Any:
         """Attempt to resume an existing SDK session by ID."""
         from aqualib.sdk.agents import build_custom_agents
+        from aqualib.sdk.hooks import build_hooks
+        from aqualib.sdk.system_prompt import build_system_message
         from aqualib.skills.tool_adapter import build_tools_from_skills
+
+        s = self.settings.copilot
 
         return await self.client.resume_session(
             session_id,
@@ -132,6 +136,16 @@ class SessionManager:
             tools=build_tools_from_skills(self.settings, self.workspace, session_slug=slug),
             skill_directories=self._collect_skill_dirs(),
             custom_agents=build_custom_agents(self.settings, self.workspace, slug),
+            system_message=build_system_message(self.settings, self.workspace),
+            hooks=build_hooks(self.settings, self.workspace, slug),
+            model=s.model,
+            reasoning_effort=s.reasoning_effort,
+            streaming=s.streaming,
+            infinite_sessions={
+                "enabled": True,
+                "background_compaction_threshold": 0.80,
+                "buffer_exhaustion_threshold": 0.95,
+            },
         )
 
     def _collect_skill_dirs(self) -> list[str]:
@@ -168,16 +182,31 @@ class SessionManager:
             config["base_url"] = p.base_url
         if p.api_key:
             config["api_key"] = p.api_key
+        if p.wire_api:
+            config["wire_api"] = p.wire_api
         if p.azure:
             config["azure"] = {"api_version": p.azure.api_version}
         return config
 
     def _build_permission_handler(self):
         """Return a permission request handler that allows all tool calls."""
-        async def on_permission_request(input_data: dict, invocation: Any) -> dict:
-            return {"permissionDecision": "allow"}
+        try:
+            from copilot.session import PermissionHandler
+            return PermissionHandler.approve_all
+        except ImportError:
+            pass
+        try:
+            from copilot.session import PermissionRequestResult
 
-        return on_permission_request
+            async def on_permission_request(input_data: Any, invocation: Any):
+                return PermissionRequestResult(kind="approved")
+
+            return on_permission_request
+        except ImportError:
+            async def on_permission_request(input_data: Any, invocation: Any) -> dict:
+                return {"permissionDecision": "allow"}
+
+            return on_permission_request
 
     # ------------------------------------------------------------------
     # Legacy compatibility shim

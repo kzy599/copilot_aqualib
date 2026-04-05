@@ -118,7 +118,7 @@ def build_custom_agents(
                 "Audits the executor's work for correctness and vendor priority compliance. "
                 "Called after task execution to validate results."
             ),
-            "tools": ["grep", "glob", "view", "read_file"],  # read-only
+            "tools": ["grep", "glob", "view", "read_file", "workspace_search"],  # read-only + workspace search
             "prompt": _REVIEWER_PROMPT + reviewer_memory_ctx,
             "infer": False,  # only explicitly delegated by parent agent
         },

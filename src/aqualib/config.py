@@ -107,6 +107,10 @@ class ProviderConfig(BaseModel):
     type: Literal["openai", "azure", "anthropic"] = "openai"
     base_url: str = Field(default="", description="Provider base URL (e.g. http://localhost:11434/v1)")
     api_key: str = Field(default="", description="Provider API key (also reads AQUALIB_PROVIDER_API_KEY)")
+    wire_api: str = Field(
+        default="completions",
+        description="Wire API format: 'completions' or 'responses' (required for GPT-5 series)",
+    )
     azure: Optional[AzureConfig] = None
 
 
