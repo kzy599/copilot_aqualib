@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aqualib.config import Settings
 from aqualib.skills.registry import SkillRegistry
+
+if TYPE_CHECKING:
+    from aqualib.workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +20,22 @@ class RAGIndexer:
     """Build and persist a LlamaIndex vector-store index.
 
     Sources:
-    * Files under ``data/`` (user-provided documents).
     * Skill descriptions from the :class:`SkillRegistry`.
+    * Files under ``data/`` (user-provided documents).
+    * SKILL.md files under ``skills/vendor/`` (vendor skill documentation).
+    * Vendor execution traces from ``results/vendor_traces/``.
+    * Task history from ``context_log.jsonl``.
     """
 
-    def __init__(self, settings: Settings, registry: SkillRegistry) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: SkillRegistry,
+        workspace: "WorkspaceManager | None" = None,
+    ) -> None:
         self.settings = settings
         self.registry = registry
+        self.workspace = workspace
         self._index: Any = None
         self._index_path = settings.directories.work / ".rag_index"
 
@@ -84,6 +97,61 @@ class RAGIndexer:
                         )
                     except Exception as exc:
                         logger.warning("Skipping %s: %s", fp, exc)
+
+        # 3. SKILL.md files from skills/vendor/
+        skills_vendor_dir = self.settings.directories.skills_vendor
+        if skills_vendor_dir.exists():
+            for fp in skills_vendor_dir.rglob("SKILL.md"):
+                try:
+                    text = fp.read_text(errors="replace")
+                    docs.append(
+                        Document(
+                            text=text[:50_000],
+                            metadata={
+                                "type": "skill_doc",
+                                "path": str(fp.relative_to(skills_vendor_dir)),
+                            },
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning("Skipping vendor SKILL.md %s: %s", fp, exc)
+
+        # 4. Vendor traces (last 50 most recent)
+        vendor_traces_dir = self.settings.directories.vendor_traces
+        if vendor_traces_dir.exists():
+            try:
+                trace_files = sorted(
+                    [f for f in vendor_traces_dir.iterdir() if f.is_file() and f.suffix == ".json"]
+                )[-50:]
+                for fp in trace_files:
+                    try:
+                        text = fp.read_text(errors="replace")
+                        docs.append(
+                            Document(
+                                text=text[:10_000],
+                                metadata={"type": "vendor_trace", "path": fp.name},
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning("Skipping vendor trace %s: %s", fp, exc)
+            except Exception as exc:
+                logger.warning("Failed to scan vendor traces: %s", exc)
+
+        # 5. Context log (last 100 entries)
+        context_log_path = self.settings.directories.context_log
+        if context_log_path.exists():
+            try:
+                with context_log_path.open(errors="replace") as fh:
+                    last_lines = list(collections.deque(fh, maxlen=100))
+                combined = "".join(last_lines)
+                docs.append(
+                    Document(
+                        text=combined[:50_000],
+                        metadata={"type": "context_log"},
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to read context log: %s", exc)
 
         if not docs:
             logger.warning("No documents to index – RAG will return empty results.")

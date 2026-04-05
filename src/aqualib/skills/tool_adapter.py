@@ -442,7 +442,7 @@ async def _execute_rag_search(
     if cache_key not in _rag_indexer_cache:
         from aqualib.skills.registry import SkillRegistry
         registry = SkillRegistry()
-        indexer = RAGIndexer(settings, registry)
+        indexer = RAGIndexer(settings, registry, workspace=workspace)
         await indexer.load_or_build()
         _rag_indexer_cache[cache_key] = indexer
 
