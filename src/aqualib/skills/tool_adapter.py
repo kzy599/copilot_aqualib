@@ -12,6 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +29,10 @@ logger = logging.getLogger(__name__)
 # Scientific workflows (genome assembly, GWAS, phylogenetics) can run
 # for hours; this timeout is a last-resort safeguard, not a task limit.
 _VENDOR_TIMEOUT_SECONDS = 43200  # 12 hours
+
+# Module-level cache for RAGIndexer instances, keyed by index path.
+# Avoids rebuilding/deserializing the vector index on every rag_search call.
+_rag_indexer_cache: dict[str, Any] = {}
 
 # ---------------------------------------------------------------------------
 # Pydantic models at module scope (required for get_type_hints in @define_tool)
@@ -125,14 +132,17 @@ def _create_vendor_tool(meta: "SkillMeta", workspace: "WorkspaceManager", sessio
         return vendor_skill_tool
 
     except ImportError:
-        # Fallback for environments without the SDK (e.g. test runs without the package)
+        # Fallback for environments without the SDK (e.g. test runs without the package).
+        # Default arguments capture loop variables at definition time, avoiding late binding.
+        async def _stub_vendor_fn(params, _meta=meta, _ws=workspace, _slug=session_slug):
+            return await _run_vendor_skill(
+                _meta, _ws, params.get("parameters", {}),
+                session_slug=_slug,
+            )
         return _make_stub_tool(
             name=f"vendor_{meta.name}",
             description=f"[VENDOR] {meta.description}. Tags: {', '.join(meta.tags)}",
-            fn=lambda params: _run_vendor_skill(
-                meta, workspace, params.get("parameters", {}),
-                session_slug=session_slug,
-            ),
+            fn=_stub_vendor_fn,
         )
 
 
@@ -287,11 +297,18 @@ async def _run_vendor_skill(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(meta.vendor_root),
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        proc.kill()
+        if sys.platform != "win32":
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                proc.kill()
+        else:
+            proc.kill()
         await proc.wait()
         workspace.save_sdk_vendor_trace(
             meta.name,
@@ -331,6 +348,11 @@ def _resolve_entry_point(meta: "SkillMeta") -> Path:
     for c in candidates:
         if c.is_file():
             return c
+    logger.warning(
+        "No CLI entry point found in %s (tried %s) — subprocess will fail.",
+        meta.vendor_root,
+        ", ".join(c.name for c in candidates),
+    )
     return meta.vendor_root / "cli.py"
 
 
@@ -414,11 +436,17 @@ async def _execute_rag_search(
     """Execute a RAG query, automatically building/loading the index as needed."""
     from aqualib.rag.indexer import RAGIndexer
     from aqualib.rag.retriever import Retriever
-    from aqualib.skills.registry import SkillRegistry
 
-    empty_registry = SkillRegistry()
-    indexer = RAGIndexer(settings, empty_registry)
-    await indexer.load_or_build()
+    cache_key = str(settings.directories.work / ".rag_index")
+
+    if cache_key not in _rag_indexer_cache:
+        from aqualib.skills.registry import SkillRegistry
+        registry = SkillRegistry()
+        indexer = RAGIndexer(settings, registry)
+        await indexer.load_or_build()
+        _rag_indexer_cache[cache_key] = indexer
+
+    indexer = _rag_indexer_cache[cache_key]
 
     if indexer.index is None:
         return "RAG index is empty — no documents to search."

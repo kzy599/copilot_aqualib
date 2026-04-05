@@ -24,7 +24,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import signal
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -175,12 +178,19 @@ class VendorCliSkill(BaseSkill):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._vendor_root),
+            start_new_session=True,
         )
 
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_VENDOR_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
-            proc.kill()
+            if sys.platform != "win32":
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
+            else:
+                proc.kill()
             await proc.wait()
             timeout_msg = f"Vendor CLI '{self.meta.name}' timed out after {_VENDOR_TIMEOUT_SECONDS}s"
             (output_dir / "cli_stdout.txt").write_text("")
@@ -227,6 +237,11 @@ class VendorCliSkill(BaseSkill):
         for c in candidates:
             if c.is_file():
                 return c
+        logger.warning(
+            "No CLI entry point found in %s (tried %s) — subprocess will fail.",
+            self._vendor_root,
+            ", ".join(c.name for c in candidates),
+        )
         # Fallback: use root/cli.py even if not yet present (will
         # produce a clear subprocess error at runtime).
         return self._vendor_root / "cli.py"
