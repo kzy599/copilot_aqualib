@@ -100,7 +100,8 @@ def build_tools_from_skills(
     if rag_tool is not None:
         tools.append(rag_tool)
 
-    logger.info("Built %d SDK tools (%d vendor + 3 utility)", len(tools), len(skill_metas))
+    utility_count = len(tools) - len(skill_metas)
+    logger.info("Built %d SDK tools (%d vendor + %d utility)", len(tools), len(skill_metas), utility_count)
     return tools
 
 
@@ -268,7 +269,7 @@ async def _run_vendor_skill(
 ) -> str:
     """Execute a vendor skill via subprocess and return the result as a string."""
     entry = _resolve_entry_point(meta)
-    output_dir = await workspace.next_invocation_dir()
+    output_dir = await workspace.next_invocation_dir(session_slug=session_slug)
     input_file = output_dir / "input.json"
     output_file = output_dir / "output.json"
 

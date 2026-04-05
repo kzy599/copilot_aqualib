@@ -320,6 +320,40 @@ def chat(
             rprint("[dim]─────────────────────────────────────────[/dim]")
             rprint()
 
+            # Shared mutable turn state — reset each iteration, referenced by closure
+            turn_state: dict = {"done": asyncio.Event(), "messages": [], "query": ""}
+
+            def on_event(event: Any) -> None:
+                event_type = getattr(event, "type", None)
+                type_val = event_type.value if hasattr(event_type, "value") else str(event_type)
+                data = getattr(event, "data", {})
+
+                if type_val == "assistant.message":
+                    content = getattr(data, "content", "") or ""
+                    turn_state["messages"].append(content)
+                    if content:
+                        rprint(f"[green]{content}[/green]")
+                elif type_val == "subagent.started":
+                    name = getattr(data, "agent_display_name", "agent")
+                    rprint(f"  [dim]▶ {name} started[/dim]")
+                elif type_val == "subagent.completed":
+                    name = getattr(data, "agent_display_name", "agent")
+                    rprint(f"  [dim]✅ {name} completed[/dim]")
+                    # Write reviewer memory when reviewer completes
+                    agent_name = getattr(data, "agent_name", "")
+                    if agent_name == "reviewer":
+                        content = getattr(data, "content", "") or ""
+                        ws.append_agent_memory_entry(actual_slug, "reviewer", {
+                            "query": turn_state["query"],
+                            "verdict": _extract_verdict(content),
+                            "violations": _extract_violations(content),
+                            "suggestions": _extract_suggestions(content),
+                        })
+                elif type_val == "session.idle":
+                    turn_state["done"].set()
+
+            sdk_session.on(on_event)
+
             while True:
                 try:
                     user_input = console.input("[bold]🧑 > [/bold]")
@@ -353,41 +387,14 @@ def chat(
                     continue
 
                 # Send message to SDK
-                done = asyncio.Event()
-                result_messages: list[str] = []
+                turn_state["done"] = asyncio.Event()
+                turn_state["messages"] = []
+                turn_state["query"] = stripped
 
-                def on_event(event: Any) -> None:
-                    event_type = getattr(event, "type", None)
-                    type_val = event_type.value if hasattr(event_type, "value") else str(event_type)
-                    data = getattr(event, "data", {})
-
-                    if type_val == "assistant.message":
-                        content = getattr(data, "content", "") or ""
-                        result_messages.append(content)
-                        if content:
-                            rprint(f"[green]{content}[/green]")
-                    elif type_val == "subagent.started":
-                        name = getattr(data, "agent_display_name", "agent")
-                        rprint(f"  [dim]▶ {name} started[/dim]")
-                    elif type_val == "subagent.completed":
-                        name = getattr(data, "agent_display_name", "agent")
-                        rprint(f"  [dim]✅ {name} completed[/dim]")
-                        # Write reviewer memory when reviewer completes
-                        agent_name = getattr(data, "agent_name", "")
-                        if agent_name == "reviewer":
-                            content = getattr(data, "content", "") or ""
-                            ws.append_agent_memory_entry(actual_slug, "reviewer", {
-                                "query": stripped,
-                                "verdict": _extract_verdict(content),
-                                "violations": _extract_violations(content),
-                                "suggestions": _extract_suggestions(content),
-                            })
-                    elif type_val == "session.idle":
-                        done.set()
-
-                sdk_session.on(on_event)
                 await sdk_session.send(stripped)
-                await done.wait()
+                await turn_state["done"].wait()
+
+                result_messages = turn_state["messages"]
 
                 # Post-turn bookkeeping (same as `run`)
                 recent_entries = ws.load_context_log()
