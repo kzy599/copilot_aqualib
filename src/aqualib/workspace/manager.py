@@ -74,15 +74,24 @@ class WorkspaceManager:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    async def next_invocation_dir(self) -> Path:
+    async def next_invocation_dir(self, session_slug: str | None = None) -> Path:
         """Create and return a new sequential invocation directory under work/.
+
+        When *session_slug* is provided the directory is scoped per session
+        (``work/<session_slug>/inv_NNNN/``) so that concurrent sessions running
+        against the same workspace do not collide.  When *session_slug* is
+        ``None`` the legacy flat path (``work/inv_NNNN/``) is used for
+        backward compatibility.
 
         Used by the SDK tool adapter to provide an isolated scratch space for
         each vendor skill call within the current session. Thread-safe via asyncio.Lock.
         """
         async with self._invocation_lock:
             self._invocation_counter += 1
-            inv_dir = self.dirs.work / f"inv_{self._invocation_counter:04d}"
+            if session_slug:
+                inv_dir = self.dirs.work / session_slug / f"inv_{self._invocation_counter:04d}"
+            else:
+                inv_dir = self.dirs.work / f"inv_{self._invocation_counter:04d}"
         inv_dir.mkdir(parents=True, exist_ok=True)
         return inv_dir
 
