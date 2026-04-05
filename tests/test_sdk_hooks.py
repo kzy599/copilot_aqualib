@@ -208,6 +208,30 @@ class TestPreToolHook:
         entries = workspace.load_context_log()
         assert any(e.get("event") == "pre_tool_use" and e.get("tool") == "bash" for e in entries)
 
+    @pytest.mark.asyncio
+    async def test_records_session_slug_in_audit_entry(self, workspace, settings):
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        hook = _make_pre_tool_hook(settings, workspace, session_slug="my-session-slug")
+        await hook({"toolName": "grep", "toolArgs": {}}, None)
+
+        entries = workspace.load_context_log()
+        pre_entries = [e for e in entries if e.get("event") == "pre_tool_use"]
+        assert len(pre_entries) == 1
+        assert pre_entries[0]["session_slug"] == "my-session-slug"
+
+    @pytest.mark.asyncio
+    async def test_no_session_slug_field_when_omitted(self, workspace, settings):
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        hook = _make_pre_tool_hook(settings, workspace)  # no session_slug
+        await hook({"toolName": "grep", "toolArgs": {}}, None)
+
+        entries = workspace.load_context_log()
+        pre_entries = [e for e in entries if e.get("event") == "pre_tool_use"]
+        assert len(pre_entries) == 1
+        assert "session_slug" not in pre_entries[0]
+
 
 # ---------------------------------------------------------------------------
 # on_post_tool_use
@@ -301,3 +325,27 @@ class TestErrorHook:
         error_entries = [e for e in entries if e.get("event") == "error"]
         assert len(error_entries) == 1
         assert "disk full" in error_entries[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_records_session_slug_in_error_entry(self, workspace):
+        from aqualib.sdk.hooks import _make_error_hook
+
+        hook = _make_error_hook(workspace, session_slug="err-session-slug")
+        await hook({"errorContext": "grep", "error": "disk full"}, None)
+
+        entries = workspace.load_context_log()
+        error_entries = [e for e in entries if e.get("event") == "error"]
+        assert len(error_entries) == 1
+        assert error_entries[0]["session_slug"] == "err-session-slug"
+
+    @pytest.mark.asyncio
+    async def test_no_session_slug_field_in_error_when_omitted(self, workspace):
+        from aqualib.sdk.hooks import _make_error_hook
+
+        hook = _make_error_hook(workspace)  # no session_slug
+        await hook({"errorContext": "grep", "error": "timeout"}, None)
+
+        entries = workspace.load_context_log()
+        error_entries = [e for e in entries if e.get("event") == "error"]
+        assert len(error_entries) == 1
+        assert "session_slug" not in error_entries[0]

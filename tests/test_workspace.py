@@ -77,6 +77,49 @@ def test_skill_invocation_dir(workspace: WorkspaceManager):
     assert "result.json" in outputs[0]["files"]
 
 
+@pytest.mark.asyncio
+async def test_next_invocation_dir_no_slug(workspace: WorkspaceManager):
+    """Without a session slug the legacy work/inv_NNNN/ path is used."""
+    d1 = await workspace.next_invocation_dir()
+    d2 = await workspace.next_invocation_dir()
+    assert d1.exists()
+    assert d2.exists()
+    assert d1.parent == workspace.dirs.work
+    assert d2.parent == workspace.dirs.work
+    assert d1 != d2
+
+
+@pytest.mark.asyncio
+async def test_next_invocation_dir_with_slug(workspace: WorkspaceManager):
+    """With a session slug the path is scoped to work/<slug>/inv_NNNN/."""
+    slug = "session-abc12345"
+    d = await workspace.next_invocation_dir(session_slug=slug)
+    assert d.exists()
+    # Directory should be nested under work/<slug>/
+    assert d.parent.parent == workspace.dirs.work
+    assert d.parent.name == slug
+
+
+@pytest.mark.asyncio
+async def test_next_invocation_dir_different_slugs_do_not_collide(workspace: WorkspaceManager):
+    """Two sessions with the same counter value get different directories."""
+    # Both counters start at 0, so both would produce inv_0001 without scoping
+    slug_a = "session-aaaaaaaa"
+    slug_b = "session-bbbbbbbb"
+    # We need separate WorkspaceManager instances to simulate separate processes
+    from aqualib.config import DirectorySettings
+    from aqualib.config import Settings as _Settings
+    dirs = DirectorySettings(base=workspace.dirs.base).resolve()
+    ws_b = WorkspaceManager(_Settings(directories=dirs))
+
+    d_a = await workspace.next_invocation_dir(session_slug=slug_a)
+    d_b = await ws_b.next_invocation_dir(session_slug=slug_b)
+
+    # Both are inv_0001 in name but live under different session sub-directories
+    assert d_a.name == d_b.name  # both "inv_0001"
+    assert d_a != d_b            # but different absolute paths
+
+
 def test_save_vendor_trace(workspace: WorkspaceManager):
     inv = SkillInvocation(
         skill_name="vendor_test_skill",

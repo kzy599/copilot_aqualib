@@ -39,10 +39,10 @@ def build_hooks(
     return {
         "on_session_start": _make_session_start_hook(workspace),
         "on_user_prompt_submitted": _make_prompt_hook(workspace, session_slug),
-        "on_pre_tool_use": _make_pre_tool_hook(settings, workspace),
+        "on_pre_tool_use": _make_pre_tool_hook(settings, workspace, session_slug),
         "on_post_tool_use": _make_post_tool_hook(workspace, session_slug),
         "on_session_end": _make_session_end_hook(workspace, session_slug),
-        "on_error_occurred": _make_error_hook(workspace),
+        "on_error_occurred": _make_error_hook(workspace, session_slug),
     }
 
 
@@ -113,7 +113,7 @@ def _make_prompt_hook(workspace: "WorkspaceManager", session_slug: str | None = 
     return on_user_prompt_submitted
 
 
-def _make_pre_tool_hook(settings: "Settings", workspace: "WorkspaceManager"):
+def _make_pre_tool_hook(settings: "Settings", workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_pre_tool_use(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, Any]:
@@ -124,11 +124,14 @@ def _make_pre_tool_hook(settings: "Settings", workspace: "WorkspaceManager"):
         """
         tool_name = input_data.get("toolName", "")
 
-        workspace.append_audit_entry({
+        entry: dict[str, Any] = {
             "event": "pre_tool_use",
             "tool": tool_name,
             "args_preview": str(input_data.get("toolArgs", {}))[:200],
-        })
+        }
+        if session_slug:
+            entry["session_slug"] = session_slug
+        workspace.append_audit_entry(entry)
 
         # Vendor priority reminder
         if settings.vendor_priority and not tool_name.startswith("vendor_"):
@@ -177,7 +180,7 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
     return on_session_end
 
 
-def _make_error_hook(workspace: "WorkspaceManager"):
+def _make_error_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     _vendor_retry_counts: dict[str, int] = {}
     _MAX_VENDOR_RETRIES = 2
 
@@ -192,11 +195,14 @@ def _make_error_hook(workspace: "WorkspaceManager"):
         error_context = input_data.get("errorContext", "")
         error_msg = input_data.get("error", "")
 
-        workspace.append_audit_entry({
+        entry: dict[str, Any] = {
             "event": "error",
             "context": error_context,
             "error": str(error_msg)[:500],
-        })
+        }
+        if session_slug:
+            entry["session_slug"] = session_slug
+        workspace.append_audit_entry(entry)
 
         error_context_str = str(error_context)
         if "vendor_" in error_context_str:
