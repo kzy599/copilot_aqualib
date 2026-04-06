@@ -221,7 +221,7 @@ class SessionManager:
             return getattr(request, field, default) or default
 
         def _is_safe_write(request: Any) -> bool:
-            path = _get_field(request, "path") or _get_field(request, "file")
+            path = _get_field(request, "fileName") or _get_field(request, "path") or _get_field(request, "file")
             if not path:
                 return True
             try:
@@ -231,7 +231,7 @@ class SessionManager:
                 return False
 
         def _is_safe_shell(request: Any) -> bool:
-            cmd = _get_field(request, "command") or _get_field(request, "cmd")
+            cmd = _get_field(request, "fullCommandText") or _get_field(request, "command") or _get_field(request, "cmd")
             if not cmd:
                 return True
             return not bool(_DANGEROUS_RE.search(cmd))
@@ -255,7 +255,7 @@ class SessionManager:
                     _get_field(request, "kind"),
                     request,
                 )
-                return PermissionRequestResult(kind="denied")
+                return PermissionRequestResult(kind="deniedByRules")
 
             return on_permission_request
         except ImportError:
@@ -276,7 +276,7 @@ class SessionManager:
     def _build_user_input_handler(self):
         """Return an async callback for agent-initiated user input requests."""
 
-        async def on_user_input_request(request: Any) -> dict:
+        async def on_user_input_request(request: Any, invocation: Any = None) -> dict:
             if isinstance(request, dict):
                 question = request.get("question", "")
                 choices = request.get("choices", []) or []

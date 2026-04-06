@@ -26,9 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Memory helpers
+_MAX_ADDITIONAL_CONTEXT_CHARS = 4000  # Hard cap for additionalContext injected at session start
 # ---------------------------------------------------------------------------
 
 
@@ -116,8 +114,8 @@ def _make_session_start_hook(workspace: "WorkspaceManager"):
             if project.get("summary"):
                 context_parts.append(f"History: {project['summary']}")
 
-        # Last 5 context log entries (coordinator project history only)
-        entries = workspace.load_context_log()
+        # Last 20 context log entries (coordinator project history only)
+        entries = workspace.load_context_log(tail=20)
         task_entries = [e for e in entries if e.get("query")]  # skip hook-audit entries
         if task_entries:
             context_parts.append(
@@ -168,7 +166,8 @@ def _make_session_start_hook(workspace: "WorkspaceManager"):
         if not context_parts:
             return None
 
-        return {"additionalContext": "\n".join(context_parts)}
+        ctx = "\n".join(context_parts)
+        return {"additionalContext": ctx[:_MAX_ADDITIONAL_CONTEXT_CHARS]}
 
     return on_session_start
 

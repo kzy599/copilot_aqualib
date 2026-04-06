@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _VENDOR_TIMEOUT_SECONDS = 43200  # 12 hours
 
 _MAX_DOC_LENGTH = 8000  # Maximum characters returned by doc-reading tools
+_MAX_DOC_FILE_CHARS = 2000  # Per-file character cap when doc_type="all"
 
 # Module-level cache for RAGIndexer instances, keyed by index path.
 # Avoids rebuilding/deserializing the vector index on every rag_search call.
@@ -313,7 +314,8 @@ def _read_library_documentation(library_name: str, doc_type: str) -> str:
     parts: list[str] = []
     for f in sorted(lib_dir.iterdir()):
         if f.is_file() and f.suffix in (".md", ".txt"):
-            parts.append(f"# {f.name}\n\n{f.read_text(encoding='utf-8')}")
+            content = f.read_text(encoding="utf-8")[:_MAX_DOC_FILE_CHARS]  # per-file cap
+            parts.append(f"# {f.name}\n\n{content}")
     # Also include skills/catalog.json if present
     catalog = lib_dir / "skills" / "catalog.json"
     if catalog.exists():
@@ -594,7 +596,21 @@ def _maybe_create_rag_search_tool(settings: "Settings", workspace: "WorkspaceMan
 
         return rag_search
     except ImportError:
-        return None
+        # Fallback for environments without the SDK (e.g. test runs).
+        async def _stub_rag_fn(params, _s=settings, _w=workspace):
+            query = params.get("query", "")
+            top_k = params.get("top_k", 5)
+            return await _execute_rag_search(_s, _w, query, top_k)
+
+        return _make_stub_tool(
+            name="rag_search",
+            description=(
+                "Semantic search over workspace data files using vector embeddings. "
+                "More powerful than workspace_search for conceptual queries. "
+                "Use when keyword search returns poor results."
+            ),
+            fn=_stub_rag_fn,
+        )
 
 
 def _is_rag_available(settings: "Settings") -> bool:

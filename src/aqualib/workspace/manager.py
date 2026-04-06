@@ -292,8 +292,12 @@ class WorkspaceManager:
         with open(self.dirs.context_log, "a") as fh:
             fh.write(json.dumps(entry) + "\n")
 
-    def load_context_log(self) -> list[dict[str, Any]]:
-        """Read all entries from ``context_log.jsonl``."""
+    def load_context_log(self, tail: int | None = None) -> list[dict[str, Any]]:
+        """Read entries from ``context_log.jsonl``.
+
+        Args:
+            tail: If given, return only the last *tail* entries.
+        """
         cl = self.dirs.context_log
         if not cl.exists():
             return []
@@ -302,6 +306,8 @@ class WorkspaceManager:
             line = line.strip()
             if line:
                 entries.append(json.loads(line))
+        if tail is not None:
+            return entries[-tail:]
         return entries
 
     def append_audit_entry(self, entry: dict[str, Any]) -> None:

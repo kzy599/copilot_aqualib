@@ -431,6 +431,7 @@ class TestSessionManager:
         # Simulate an SDK object with attributes
         request = MagicMock()
         request.kind = "shell"
+        request.fullCommandText = "rm -rf /"
         request.command = "rm -rf /"
         result = await handler(request, None)
         assert self._perm_decision(result) == "deny"
