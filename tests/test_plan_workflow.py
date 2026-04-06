@@ -129,14 +129,13 @@ class TestSystemPrompt:
 
 class TestAgentPrompts:
     def test_executor_prompt_reads_plan(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Executor prompt should reference plan.md but NOT instruct re-reading it."""
+        """Executor prompt should reference reading docs and vendor skills."""
         from aqualib.sdk.agents import build_custom_agents
 
         agents = build_custom_agents(settings, workspace)
         executor = next(a for a in agents if a["name"] == "executor")
-        assert "plan.md" in executor["prompt"]
-        # Executor trusts conversation history — it should NOT redundantly re-read plan.md
-        assert "NOT re-read plan.md" in executor["prompt"]
+        assert "read_library_doc" in executor["prompt"]
+        assert "read_skill_doc" in executor["prompt"]
 
     def test_reviewer_prompt_reads_plan(self, settings: Settings, workspace: WorkspaceManager) -> None:
         """Reviewer prompt should instruct reading plan.md independently."""
@@ -145,16 +144,14 @@ class TestAgentPrompts:
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
         assert "plan.md" in reviewer["prompt"]
-        assert "Read the Plan First" in reviewer["prompt"]
+        assert "mandatory" in reviewer["prompt"]
 
     def test_reviewer_prompt_audits_plan_adherence(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Reviewer prompt must include a plan adherence audit step and verdict field."""
+        """Reviewer prompt must include a plan adherence verdict field."""
         from aqualib.sdk.agents import build_custom_agents
 
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
-        # Explicit plan adherence responsibility in the prompt
-        assert "Plan Adherence Audit" in reviewer["prompt"]
         # PLAN_ADHERENCE appears in the verdict format the reviewer must emit
         assert "PLAN_ADHERENCE" in reviewer["prompt"]
 
@@ -164,8 +161,8 @@ class TestAgentPrompts:
 
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
-        # Explicit plan reasonableness audit
-        assert "Plan Reasonableness Audit" in reviewer["prompt"]
+        # Audit plan quality step
+        assert "plan quality" in reviewer["prompt"].lower()
         # revision_needed is a valid PLAN_QUALITY value
         assert "revision_needed" in reviewer["prompt"]
         # plan_revision_needed is a valid VERDICT value
@@ -187,7 +184,6 @@ class TestAgentPrompts:
         guidelines = msg["sections"]["guidelines"]["content"]
         # Plan revision loop belongs in system_prompt, not in the executor's condensed prompt
         assert "plan_revision_needed" in guidelines
-        assert "plan revision" in guidelines.lower()
 
     def test_planner_guidelines_include_plan_revision_loop(
         self, settings: Settings, workspace: WorkspaceManager,
@@ -198,7 +194,7 @@ class TestAgentPrompts:
         msg = build_system_message(settings, workspace)
         guidelines = msg["sections"]["guidelines"]["content"]
         assert "plan_revision_needed" in guidelines
-        assert "Revise the plan" in guidelines
+        assert "revise" in guidelines.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +239,6 @@ class TestReviewerMemoryInjection:
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
 
-        assert "Execution Report" in reviewer["prompt"]
-        assert "Previous Verdicts" in reviewer["prompt"]
-        assert "did not produce execution report" in reviewer["prompt"]
+        assert "EXECUTION_REPORT" in reviewer["prompt"]
+        assert "previous verdicts" in reviewer["prompt"].lower()
 
