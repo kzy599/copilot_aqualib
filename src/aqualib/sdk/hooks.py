@@ -38,20 +38,25 @@ def _save_reviewer_memory(
 ) -> None:
     """Extract reviewer verdict fields from *result_text* and persist to memory.
 
-    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, PLAN_ADHERENCE, and SUGGESTIONS
-    using regex so the reviewer's decisions accumulate in ``memory/reviewer.json``
-    rather than being lost at session end.
+    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, PLAN_ADHERENCE, DATA_VERIFIED,
+    and SUGGESTIONS using regex so the reviewer's decisions accumulate in
+    ``memory/reviewer.json`` rather than being lost at session end.
 
     PLAN_QUALITY supports three states:
     - ``valid`` — plan is sound
     - ``violated`` — minor issues (missing files, bad params)
     - ``revision_needed`` — the plan is fundamentally flawed and must be revised
       by the Planner before re-execution
+
+    DATA_VERIFIED supports two states:
+    - ``confirmed`` — plan's data descriptions match actual file contents
+    - ``discrepancy`` — plan's data descriptions differ from actual file contents
     """
     verdict_match = re.search(r"VERDICT\s*:\s*(\S+)", result_text, re.IGNORECASE)
     vendor_match = re.search(r"VENDOR_PRIORITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     quality_match = re.search(r"PLAN_QUALITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     adherence_match = re.search(r"PLAN_ADHERENCE\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    data_verified_match = re.search(r"DATA_VERIFIED\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     suggestions_match = re.search(r"SUGGESTIONS\s*:\s*(.+?)(?:\n\n|$)", result_text, re.IGNORECASE | re.DOTALL)
 
     # Warn when the output doesn't match the expected reviewer format at all
@@ -69,6 +74,7 @@ def _save_reviewer_memory(
         "vendor_priority": vendor_match.group(1).strip() if vendor_match else "unknown",
         "plan_quality": quality_match.group(1).strip() if quality_match else "unknown",
         "plan_adherence": adherence_match.group(1).strip() if adherence_match else "unknown",
+        "data_verified": data_verified_match.group(1).strip() if data_verified_match else "unknown",
         "suggestions": suggestions_match.group(1).strip() if suggestions_match else "",
         "violations": [],
     }
@@ -82,6 +88,8 @@ def _save_reviewer_memory(
         entry["violations"].append(f"plan_quality: {entry['plan_quality']}")
     if re.match(r"violated", entry["plan_adherence"], re.IGNORECASE):
         entry["violations"].append(f"plan_adherence: {entry['plan_adherence']}")
+    if re.match(r"discrepancy", entry["data_verified"], re.IGNORECASE):
+        entry["violations"].append(f"data_verified: {entry['data_verified']}")
 
     workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
 

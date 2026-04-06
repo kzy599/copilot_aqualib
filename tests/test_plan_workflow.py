@@ -171,13 +171,49 @@ class TestAgentPrompts:
         # plan_revision_needed is a valid VERDICT value
         assert "plan_revision_needed" in reviewer["prompt"]
 
-    def test_reviewer_has_read_skill_doc_tool(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Reviewer needs read_skill_doc to independently verify skill capabilities."""
+    def test_reviewer_has_full_tool_access(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer now has full tool access (tools=None) for thorough auditing."""
         from aqualib.sdk.agents import build_custom_agents
 
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
-        assert "read_skill_doc" in reviewer["tools"]
+        assert reviewer["tools"] is None
+
+    def test_reviewer_tools_is_none(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer tools should be None to allow full tool access."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert reviewer["tools"] is None
+
+    def test_reviewer_prompt_has_data_verification(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt should contain a Data Verification audit step."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert "Data Verification" in reviewer["prompt"]
+        assert "bash" in reviewer["prompt"]
+        assert "wc -l" in reviewer["prompt"]
+
+    def test_reviewer_prompt_has_critical_constraints(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt should contain CRITICAL CONSTRAINTS about not invoking vendor_* tools."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert "CRITICAL CONSTRAINTS" in reviewer["prompt"]
+        assert "vendor_*" in reviewer["prompt"]
+        assert "write_plan" in reviewer["prompt"]
+
+    def test_reviewer_prompt_has_data_verified_verdict(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt verdict format should include DATA_VERIFIED field."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert "DATA_VERIFIED" in reviewer["prompt"]
 
     def test_executor_prompt_handles_plan_revision(self, settings: Settings, workspace: WorkspaceManager) -> None:
         """Executor prompt must describe escalation when Reviewer requests plan revision."""

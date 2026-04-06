@@ -518,3 +518,71 @@ class TestSaveReviewerMemory:
         assert entry["plan_quality"].startswith("violated")
         assert any("plan_quality" in v for v in entry["violations"])
 
+    def test_parses_data_verified_confirmed(self, tmp_path):
+        """DATA_VERIFIED: confirmed should be stored without adding a violation."""
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s6")
+        slug = meta["slug"]
+
+        result_text = (
+            "VERDICT: approved\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: valid\n"
+            "PLAN_ADHERENCE: followed\n"
+            "DATA_VERIFIED: confirmed\n"
+            "SUGGESTIONS: none\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        entry = mem["entries"][0]
+        assert entry["data_verified"] == "confirmed"
+        assert not any("data_verified" in v for v in entry["violations"])
+
+    def test_parses_data_verified_discrepancy(self, tmp_path):
+        """DATA_VERIFIED: discrepancy should be stored and added as a violation."""
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s7")
+        slug = meta["slug"]
+
+        result_text = (
+            "VERDICT: plan_revision_needed\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: revision_needed - wrong row count\n"
+            "PLAN_ADHERENCE: followed\n"
+            "DATA_VERIFIED: discrepancy - plan says 599 but file has 600\n"
+            "SUGGESTIONS: fix genotype count in plan\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        entry = mem["entries"][0]
+        assert entry["data_verified"].startswith("discrepancy")
+        assert any("data_verified" in v for v in entry["violations"])
+
+    def test_missing_data_verified_defaults_to_unknown(self, tmp_path):
+        """When DATA_VERIFIED field is absent, it should default to 'unknown' with no violation."""
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s8")
+        slug = meta["slug"]
+
+        result_text = (
+            "VERDICT: approved\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: valid\n"
+            "PLAN_ADHERENCE: followed\n"
+            "SUGGESTIONS: none\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        entry = mem["entries"][0]
+        assert entry["data_verified"] == "unknown"
+        assert not any("data_verified" in v for v in entry["violations"])
+
