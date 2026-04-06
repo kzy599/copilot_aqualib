@@ -292,12 +292,12 @@ def _make_pre_tool_hook(
             entry["session_slug"] = session_slug
         workspace.append_audit_entry(entry)
 
-        # Hard tool call limit: block and demand wrap-up when exceeded
-        if _tool_call_count[0] > _HARD_TOOL_LIMIT:
+        # Hard tool call limit: block and demand wrap-up when limit is reached
+        if _tool_call_count[0] >= _HARD_TOOL_LIMIT:
             return {
                 "permissionDecision": "block",
                 "additionalContext": (
-                    f"🛑 HARD TOOL LIMIT REACHED ({_tool_call_count[0]}/{_HARD_TOOL_LIMIT}): "
+                    f"🛑 HARD TOOL LIMIT REACHED ({_tool_call_count[0]} calls, max {_HARD_TOOL_LIMIT}): "
                     "No further tool calls are allowed. "
                     "Immediately produce the EXECUTION_REPORT with what you have completed "
                     "and say 'Delegating to reviewer for audit.'"

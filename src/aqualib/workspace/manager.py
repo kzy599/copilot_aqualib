@@ -449,7 +449,7 @@ class WorkspaceManager:
         base = self.dirs.base
         dest_dir = self.session_results_dir(session_slug)
 
-        for item in sorted(base.iterdir()):
+        for item in base.iterdir():
             if item.name in _SKIP_DIRS:
                 continue
             if item.name in _FRAMEWORK_FILES:

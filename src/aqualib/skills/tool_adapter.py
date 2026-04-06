@@ -448,7 +448,7 @@ async def _run_vendor_skill(
     if command:
         # Pre-validate: reject obviously malformed commands before passing to shell
         cmd_stripped = command.strip()
-        _INVALID_COMMANDS = {"--", "-", "run", ""}
+        _INVALID_COMMANDS = {"--", "-", "run"}
         if len(cmd_stripped) < 3 or cmd_stripped in _INVALID_COMMANDS:
             return (
                 f"ERROR: Vendor skill '{meta.name}' received an invalid command: "
