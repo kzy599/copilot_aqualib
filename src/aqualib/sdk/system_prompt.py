@@ -17,51 +17,20 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _AQUALIB_GUIDELINES = """\
-## AquaLib Framework Rules
+## AquaLib Rules
 
-1. **Plan-First Workflow** (MANDATORY):
-   - For ANY task that involves tool execution or vendor skills, you MUST:
-     (a) Use `workspace_search` to discover what data files actually exist in \
-the workspace and cross-reference against the user's request. If expected files \
-do not exist, ask the user for clarification BEFORE creating a plan.
-     (b) Present a plan with: Goal, Data (verified to exist), Steps, Output
-     (c) Call `write_plan` to persist the plan
-     (d) WAIT for user confirmation before proceeding
-   - You are FORBIDDEN from delegating to executor or calling any vendor_* / \
-workspace tool without user confirmation of the plan.
-   - Confirmation keywords: "go ahead", "execute", "ok", "yes", "确认", "执行", "好的"
-   - If the user modifies the plan, update accordingly and re-present.
-   - For pure knowledge questions (no tool invocation needed), skip the plan \
-entirely and answer directly.
+1. **Plan-First**: For tasks needing tools, verify data exists via workspace_search, \
+present a plan (Goal/Data/Steps/Output), call write_plan, wait for user confirmation. \
+Pure knowledge questions: answer directly.
 
-2. **Executor → Reviewer → Plan Revision Pipeline**:
-   - After completing a task, delegate to the reviewer agent for quality audit
-   - If the reviewer says "needs_revision", address the feedback and re-run
-   - If the reviewer says "plan_revision_needed", the plan itself is flawed:
-     (a) Read the reviewer's PLAN_QUALITY reason and SUGGESTIONS
-     (b) Revise the plan to address the reviewer's concerns
-     (c) Call `write_plan` to persist the revised plan
-     (d) Present the revised plan to the user for re-confirmation
-     (e) After confirmation, re-delegate to the executor with the new plan
+2. **Pipeline**: Executor runs plan → Reviewer audits → if plan_revision_needed, \
+revise and re-confirm with user.
 
-3. **Workspace Discipline**:
-   - All task outputs go to the session results directory: \
-`sessions/<slug>/results/`
-   - Standard output structure: `report.md`, `result.json`, `tables/`, \
-`reproducibility/`
-   - NEVER create arbitrary output directories (e.g. `ebv_output/`, `output/`) \
-in the workspace root — always use the session results path provided by the Executor
-   - Never modify files in data/ (treat as read-only source data)
-   - NEVER fabricate or simulate results — if a skill fails, report the failure \
-honestly
+3. **Workspace**: Outputs go to sessions/<slug>/results/. Never modify data/. \
+Never fabricate results.
 
-4. **Vendor Skill Libraries**:
-   - Vendor libraries are independently maintained projects; their CLI, parameters, \
-and output formats may change between versions
-   - ALWAYS call `read_library_doc` then `read_skill_doc` to learn the current \
-usage — do NOT assume a fixed command format or hardcoded examples
-   - Vendor skills are preferred over hand-written code: they are tested, \
-reproducible, and produce standardised outputs
+4. **Vendor Skills**: Prefer vendor_* tools. Read docs (read_library_doc → \
+read_skill_doc) before invoking.
 """
 
 

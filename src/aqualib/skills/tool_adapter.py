@@ -48,11 +48,7 @@ try:
     class VendorSkillParams(BaseModel):
         command: str = PydanticField(
             default="",
-            description=(
-                "Full shell command to execute the vendor skill. You MUST first call "
-                "read_library_doc and read_skill_doc to learn the correct command format "
-                "— it varies per library and may change between versions."
-            ),
+            description="Full shell command. Read docs via read_library_doc/read_skill_doc first.",
         )
         parameters: dict = PydanticField(
             default_factory=dict,
@@ -155,9 +151,8 @@ def _create_vendor_tool(meta: "SkillMeta", workspace: "WorkspaceManager", sessio
         @define_tool(
             name=f"vendor_{meta.name}",
             description=(
-                f"[VENDOR] {meta.description}. Tags: {', '.join(meta.tags)}. "
-                f"IMPORTANT: First call read_library_doc then read_skill_doc to learn the exact "
-                f"CLI syntax, then set 'command' to the full shell command string."
+                f"{meta.description}. Tags: {', '.join(meta.tags)}. "
+                f"Requires 'command' (full shell command from docs)."
             ),
         )
         async def vendor_skill_tool(params: VendorSkillParams) -> str:
@@ -183,9 +178,8 @@ def _create_vendor_tool(meta: "SkillMeta", workspace: "WorkspaceManager", sessio
         return _make_stub_tool(
             name=f"vendor_{meta.name}",
             description=(
-                f"[VENDOR] {meta.description}. Tags: {', '.join(meta.tags)}. "
-                f"IMPORTANT: First call read_library_doc then read_skill_doc to learn the exact "
-                f"CLI syntax, then set 'command' to the full shell command string."
+                f"{meta.description}. Tags: {', '.join(meta.tags)}. "
+                f"Requires 'command' (full shell command from docs)."
             ),
             fn=_stub_vendor_fn,
         )

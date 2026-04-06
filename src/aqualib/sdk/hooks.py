@@ -134,16 +134,11 @@ def build_hooks(
     skill_metas: "list | None" = None,
 ) -> dict:
     """Build and return the complete hook dict for a Copilot SDK session."""
-    # Shared state: tracks which doc tools the model has called this session.
-    # Used by the doc-first gate to enforce read_library_doc/read_skill_doc
-    # before any vendor_* tool invocation.
-    _doc_tools_called: set[str] = set()
-
     return {
         "on_session_start": _make_session_start_hook(workspace, skill_metas=skill_metas),
         "on_user_prompt_submitted": _make_prompt_hook(workspace, session_slug),
-        "on_pre_tool_use": _make_pre_tool_hook(settings, workspace, session_slug, _doc_tools_called),
-        "on_post_tool_use": _make_post_tool_hook(workspace, session_slug, _doc_tools_called),
+        "on_pre_tool_use": _make_pre_tool_hook(settings, workspace, session_slug),
+        "on_post_tool_use": _make_post_tool_hook(workspace, session_slug),
         "on_session_end": _make_session_end_hook(workspace, session_slug),
         "on_error_occurred": _make_error_hook(workspace, session_slug),
     }
@@ -252,31 +247,17 @@ def _make_pre_tool_hook(
     settings: "Settings",
     workspace: "WorkspaceManager",
     session_slug: str | None = None,
-    doc_tools_called: "set[str] | None" = None,
 ):
-    if doc_tools_called is None:
-        doc_tools_called = set()
-
-    _vendor_reminder_sent = [False]  # mutable flag: fires once per session
     _tool_call_count = [0]  # mutable counter for hard tool call limit
     _HARD_TOOL_LIMIT = 25
-
-    # Utility tools that should never trigger the vendor priority reminder
-    _UTILITY_TOOLS = frozenset({"workspace_search", "read_skill_doc", "read_library_doc", "write_plan"})
 
     async def on_pre_tool_use(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, Any]:
-        """Doc-first gate + tool call limit + vendor priority check + audit record.
-
-        If a vendor_* tool is invoked before any documentation has been read
-        in this session, block the call and guide the model to read docs first.
+        """Tool call limit + audit record.
 
         If the hard tool call limit is reached, block all further calls and
         instruct the model to wrap up immediately.
-
-        If vendor skills are available but the agent chose a non-utility built-in
-        tool, return an ``additionalContext`` reminder once per session.
         """
         tool_name = input_data.get("toolName", "")
 
@@ -297,48 +278,10 @@ def _make_pre_tool_hook(
             return {
                 "permissionDecision": "block",
                 "additionalContext": (
-                    f"🛑 HARD TOOL LIMIT REACHED ({_tool_call_count[0]} calls, max {_HARD_TOOL_LIMIT}): "
-                    "No further tool calls are allowed. "
-                    "Immediately produce the EXECUTION_REPORT with what you have completed "
-                    "and say 'Delegating to reviewer for audit.'"
+                    f"🛑 Tool limit reached ({_tool_call_count[0]}/{_HARD_TOOL_LIMIT}). "
+                    "Stop. Produce EXECUTION_REPORT now."
                 ),
             }
-
-        # Doc-first gate: block vendor tool calls until docs have been read.
-        # `not doc_tools_called` is True when the set is empty (no docs read yet).
-        if tool_name.startswith("vendor_") and not doc_tools_called:
-            return {
-                "permissionDecision": "block",
-                "additionalContext": (
-                    "🚫 DOC-FIRST GATE: You must read documentation before invoking a vendor tool. "
-                    "Call read_library_doc first to understand the library's CLI architecture, "
-                    "then read_skill_doc for the specific skill's parameters. "
-                    "Then retry the vendor tool call with the 'command' field set to the full "
-                    "shell command you learned from the docs."
-                ),
-            }
-
-        # Vendor priority reminder: fires once per session, skips utility tools
-        if (
-            settings.vendor_priority
-            and not _vendor_reminder_sent[0]
-            and not tool_name.startswith("vendor_")
-            and tool_name not in _UTILITY_TOOLS
-        ):
-            vendor_skills = [
-                t for t in input_data.get("availableTools", [])
-                if str(t).startswith("vendor_")
-            ]
-            if vendor_skills:
-                _vendor_reminder_sent[0] = True
-                return {
-                    "permissionDecision": "allow",
-                    "additionalContext": (
-                        f"⚠️ VENDOR PRIORITY REMINDER: You are about to use '{tool_name}' "
-                        f"but vendor skills are available: {', '.join(str(v) for v in vendor_skills)}. "
-                        f"Prefer vendor skills when applicable."
-                    ),
-                }
 
         return {"permissionDecision": "allow"}
 
@@ -348,26 +291,15 @@ def _make_pre_tool_hook(
 def _make_post_tool_hook(
     workspace: "WorkspaceManager",
     session_slug: str | None = None,
-    doc_tools_called: "set[str] | None" = None,
 ):
-    if doc_tools_called is None:
-        doc_tools_called = set()
-
     async def on_post_tool_use(input_data: dict[str, Any], invocation: Any) -> None:
         """Record tool execution result to the audit trail.
-
-        Also tracks when read_skill_doc or read_library_doc are called so the
-        doc-first gate in on_pre_tool_use can allow vendor tool invocations.
 
         Automatically captures reviewer verdicts and executor vendor-skill
         results into agent-role memory when a session_slug is available.
         """
         tool_name = input_data.get("toolName", "")
         result_text = str(input_data.get("toolResult", ""))
-
-        # Track documentation reads for the doc-first gate
-        if tool_name in ("read_skill_doc", "read_library_doc"):
-            doc_tools_called.add(tool_name)
 
         entry: dict[str, Any] = {
             "event": "post_tool_use",
@@ -411,25 +343,7 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
 
 def _build_rethink_hint(error_context: str, error_msg: str, attempt: int, max_attempts: int) -> str:
     """Generate a concise rethink hint for the agent based on error patterns."""
-    error_lower = error_msg.lower()
-
-    if "permission denied" in error_lower:
-        fix_suggestion = "Check file paths are within workspace data/ and outputs go to results/."
-    elif "no such file" in error_lower or "not found" in error_lower:
-        fix_suggestion = "Use workspace_search to verify correct file paths before retrying."
-    elif "import" in error_lower or "module" in error_lower:
-        fix_suggestion = "Read SKILL.md for required packages; try --demo flag if available."
-    elif "timeout" in error_lower:
-        fix_suggestion = "Try with a smaller input dataset or check if chunked processing is supported."
-    elif "invalid" in error_lower and ("param" in error_lower or "arg" in error_lower):
-        fix_suggestion = "Use read_skill_doc to verify parameter schema and types."
-    else:
-        fix_suggestion = "Re-read skill docs via read_skill_doc and adjust parameters."
-
-    return (
-        f"🔄 RETRY {attempt}/{max_attempts}: {error_msg[:150]} — "
-        f"{fix_suggestion} Do NOT retry with identical parameters."
-    )
+    return f"🔄 Retry {attempt}/{max_attempts}: {error_msg[:120]}. Re-read docs, adjust params."
 
 
 def _make_error_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
@@ -482,9 +396,8 @@ def _make_error_hook(workspace: "WorkspaceManager", session_slug: str | None = N
             return {
                 "errorHandling": "skip",
                 "additionalContext": (
-                    f"⚠️ All {_MAX_RETRIES} retry attempts failed for '{error_context_str}'. "
-                    f"Last error: {error_msg_str[:200]}. "
-                    f"Report this failure to the user honestly. Do NOT fabricate results."
+                    f"⚠️ Retries exhausted for '{error_context_str}': {error_msg_str[:150]}. "
+                    f"Report failure honestly."
                 ),
             }
 
