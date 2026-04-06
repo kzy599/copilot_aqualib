@@ -276,6 +276,91 @@ class TestBuildCustomAgentsMemoryInjection:
         assert "vendor_task_1" not in prompt
         assert "vendor_task_2" not in prompt
 
+    def test_injects_execution_report_into_reviewer(
+        self, workspace: WorkspaceManager, session_slug: str
+    ):
+        """Reviewer prompt includes the executor's latest EXECUTION_REPORT fields."""
+        from aqualib.config import Settings
+        from aqualib.sdk.agents import build_custom_agents
+
+        workspace.append_agent_memory_entry(
+            session_slug,
+            "executor",
+            {
+                "event": "execution_report",
+                "pre_flight": "passed",
+                "steps_completed": "2/2",
+                "total_vendor_calls": "2",
+                "errors_encountered": "0",
+                "sanity_checks": "all_passed",
+            },
+        )
+
+        settings = Settings()
+        agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        prompt = reviewer["prompt"]
+
+        assert "Executor's latest execution report" in prompt
+        assert "PRE_FLIGHT: passed" in prompt
+        assert "STEPS_COMPLETED: 2/2" in prompt
+        assert "TOTAL_VENDOR_CALLS: 2" in prompt
+        assert "SANITY_CHECKS: all_passed" in prompt
+        assert "ERRORS_ENCOUNTERED: 0" in prompt
+
+    def test_no_execution_report_section_when_absent(
+        self, workspace: WorkspaceManager, session_slug: str
+    ):
+        """When no execution_report in memory, reviewer prompt has no report section."""
+        from aqualib.config import Settings
+        from aqualib.sdk.agents import build_custom_agents
+
+        settings = Settings()
+        agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert "Executor's latest execution report" not in reviewer["prompt"]
+
+    def test_only_latest_execution_report_injected(
+        self, workspace: WorkspaceManager, session_slug: str
+    ):
+        """Only the most recent EXECUTION_REPORT is injected into reviewer prompt."""
+        from aqualib.config import Settings
+        from aqualib.sdk.agents import build_custom_agents
+
+        workspace.append_agent_memory_entry(
+            session_slug,
+            "executor",
+            {
+                "event": "execution_report",
+                "pre_flight": "failed - old run",
+                "steps_completed": "0/3",
+                "total_vendor_calls": "0",
+                "errors_encountered": "1",
+                "sanity_checks": "unknown",
+            },
+        )
+        workspace.append_agent_memory_entry(
+            session_slug,
+            "executor",
+            {
+                "event": "execution_report",
+                "pre_flight": "passed",
+                "steps_completed": "3/3",
+                "total_vendor_calls": "3",
+                "errors_encountered": "0",
+                "sanity_checks": "all_passed",
+            },
+        )
+
+        settings = Settings()
+        agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        prompt = reviewer["prompt"]
+
+        # Latest report (passed) should be present; old one (failed) should not
+        assert "PRE_FLIGHT: passed" in prompt
+        assert "failed - old run" not in prompt
+
 
 # ---------------------------------------------------------------------------
 # on_session_end hook — resource cleanup only (executor memory moved to CLI)

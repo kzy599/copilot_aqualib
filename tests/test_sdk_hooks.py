@@ -518,3 +518,153 @@ class TestSaveReviewerMemory:
         assert entry["plan_quality"].startswith("violated")
         assert any("plan_quality" in v for v in entry["violations"])
 
+
+# ---------------------------------------------------------------------------
+# _save_execution_report_memory
+# ---------------------------------------------------------------------------
+
+
+class TestSaveExecutionReportMemory:
+    def _make_workspace(self, tmp_path):
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        ws = WorkspaceManager(Settings(directories=dirs))
+        ws.create_project(name="exec_report_test")
+        return ws
+
+    def test_parses_all_fields(self, tmp_path):
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s1")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: passed\n"
+            "  STEPS_COMPLETED: 3/3\n"
+            "  STEP_DETAILS:\n"
+            "    - Step 1: vendor_seq_align → ✅ alignment done\n"
+            "  OUTPUT_FILES: results/output.csv (42 rows)\n"
+            "  SANITY_CHECKS: all_passed\n"
+            "  TOTAL_VENDOR_CALLS: 1\n"
+            "  ERRORS_ENCOUNTERED: 0\n"
+        )
+        _save_execution_report_memory(ws, slug, result_text)
+
+        exec_mem = ws.load_agent_memory(slug, "executor")
+        assert len(exec_mem["entries"]) == 1
+        entry = exec_mem["entries"][0]
+        assert entry["event"] == "execution_report"
+        assert entry["pre_flight"] == "passed"
+        assert entry["steps_completed"] == "3/3"
+        assert entry["total_vendor_calls"] == "1"
+        assert entry["errors_encountered"] == "0"
+        assert entry["sanity_checks"] == "all_passed"
+
+    def test_bridges_to_reviewer_memory(self, tmp_path):
+        """Execution report is saved to both executor and reviewer memory."""
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s2")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: passed\n"
+            "  STEPS_COMPLETED: 2/2\n"
+            "  SANITY_CHECKS: all_passed\n"
+            "  TOTAL_VENDOR_CALLS: 2\n"
+            "  ERRORS_ENCOUNTERED: 0\n"
+        )
+        _save_execution_report_memory(ws, slug, result_text)
+
+        rev_mem = ws.load_agent_memory(slug, "reviewer")
+        assert len(rev_mem["entries"]) == 1
+        assert rev_mem["entries"][0]["event"] == "execution_report"
+
+    def test_pre_flight_failed(self, tmp_path):
+        """PRE_FLIGHT: failed is parsed correctly."""
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s3")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: failed - input.csv not found\n"
+            "  STEPS_COMPLETED: 0/3\n"
+            "  SANITY_CHECKS: all_passed\n"
+            "  TOTAL_VENDOR_CALLS: 0\n"
+            "  ERRORS_ENCOUNTERED: 1 - missing input file\n"
+        )
+        _save_execution_report_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "executor")
+        entry = mem["entries"][0]
+        assert entry["pre_flight"].startswith("failed")
+        assert entry["steps_completed"] == "0/3"
+        assert entry["errors_encountered"].startswith("1")
+
+    def test_missing_fields_default_to_unknown(self, tmp_path):
+        """Partial EXECUTION_REPORT defaults missing fields to 'unknown'."""
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s4")
+        slug = meta["slug"]
+
+        # Only PRE_FLIGHT and STEPS_COMPLETED present
+        result_text = "EXECUTION_REPORT:\n  PRE_FLIGHT: passed\n  STEPS_COMPLETED: 1/2\n"
+        _save_execution_report_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "executor")
+        entry = mem["entries"][0]
+        assert entry["total_vendor_calls"] == "unknown"
+        assert entry["errors_encountered"] == "unknown"
+        assert entry["sanity_checks"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_post_tool_hook_detects_execution_report(self, tmp_path):
+        """on_post_tool_use automatically calls _save_execution_report_memory."""
+        from aqualib.sdk.hooks import _make_post_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s5")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: passed\n"
+            "  STEPS_COMPLETED: 1/1\n"
+            "  SANITY_CHECKS: all_passed\n"
+            "  TOTAL_VENDOR_CALLS: 1\n"
+            "  ERRORS_ENCOUNTERED: 0\n"
+            "Delegating to reviewer for audit."
+        )
+
+        hook = _make_post_tool_hook(ws, session_slug=slug)
+        await hook({"toolName": "executor", "toolResult": result_text}, None)
+
+        exec_mem = ws.load_agent_memory(slug, "executor")
+        report_entries = [e for e in exec_mem["entries"] if e.get("event") == "execution_report"]
+        assert len(report_entries) == 1
+        assert report_entries[0]["pre_flight"] == "passed"
+
+    @pytest.mark.asyncio
+    async def test_post_tool_hook_does_not_detect_without_keyword(self, tmp_path):
+        """on_post_tool_use does NOT save execution report when keyword is absent."""
+        from aqualib.sdk.hooks import _make_post_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s6")
+        slug = meta["slug"]
+
+        hook = _make_post_tool_hook(ws, session_slug=slug)
+        await hook({"toolName": "bash", "toolResult": "some plain output"}, None)
+
+        exec_mem = ws.load_agent_memory(slug, "executor")
+        report_entries = [e for e in exec_mem["entries"] if e.get("event") == "execution_report"]
+        assert len(report_entries) == 0
+

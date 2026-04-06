@@ -86,6 +86,43 @@ def _save_reviewer_memory(
     workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
 
 
+def _save_execution_report_memory(
+    workspace: "WorkspaceManager",
+    session_slug: str,
+    result_text: str,
+) -> None:
+    """Parse EXECUTION_REPORT from executor output and save to both executor and reviewer memory.
+
+    Parses five scalar fields — PRE_FLIGHT, STEPS_COMPLETED, TOTAL_VENDOR_CALLS,
+    ERRORS_ENCOUNTERED, and SANITY_CHECKS — using regex, then persists as an
+    ``"execution_report"`` event in both executor and reviewer memory so the
+    reviewer receives a structured summary instead of raw 200-char output_preview
+    snippets.  Multi-line sub-sections (STEP_DETAILS, OUTPUT_FILES) are intentionally
+    omitted to keep the memory entry compact.
+    """
+    pre_flight_match = re.search(r"PRE_FLIGHT\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    steps_match = re.search(r"STEPS_COMPLETED\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    vendor_calls_match = re.search(
+        r"TOTAL_VENDOR_CALLS\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE
+    )
+    errors_match = re.search(
+        r"ERRORS_ENCOUNTERED\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE
+    )
+    sanity_match = re.search(r"SANITY_CHECKS\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+
+    entry: dict[str, Any] = {
+        "event": "execution_report",
+        "pre_flight": pre_flight_match.group(1).strip() if pre_flight_match else "unknown",
+        "steps_completed": steps_match.group(1).strip() if steps_match else "unknown",
+        "total_vendor_calls": vendor_calls_match.group(1).strip() if vendor_calls_match else "unknown",
+        "errors_encountered": errors_match.group(1).strip() if errors_match else "unknown",
+        "sanity_checks": sanity_match.group(1).strip() if sanity_match else "unknown",
+    }
+
+    workspace.append_agent_memory_entry(session_slug, "executor", entry)
+    workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
+
+
 # ---------------------------------------------------------------------------
 # Public factory
 # ---------------------------------------------------------------------------
@@ -331,6 +368,13 @@ def _make_post_tool_hook(
                 _save_reviewer_memory(workspace, session_slug, result_text)
             except Exception:
                 logger.debug("Failed to save reviewer memory", exc_info=True)
+
+        # Auto-capture execution report when the Executor produces one
+        if session_slug and "EXECUTION_REPORT:" in result_text.upper():
+            try:
+                _save_execution_report_memory(workspace, session_slug, result_text)
+            except Exception:
+                logger.debug("Failed to save execution report memory", exc_info=True)
 
         # Auto-capture executor memory when a vendor_* tool completes,
         # and bridge the result to reviewer memory so the reviewer can
