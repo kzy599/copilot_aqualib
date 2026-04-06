@@ -394,3 +394,82 @@ class TestErrorHook:
         error_entries = [e for e in entries if e.get("event") == "error"]
         assert len(error_entries) == 1
         assert "disk full" in error_entries[0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# _save_reviewer_memory — plan adherence parsing
+# ---------------------------------------------------------------------------
+
+
+class TestSaveReviewerMemory:
+    def _make_workspace(self, tmp_path):
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        ws = WorkspaceManager(Settings(directories=dirs))
+        ws.create_project(name="reviewer_test")
+        return ws
+
+    def test_parses_plan_adherence_followed(self, tmp_path):
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s1")
+        slug = meta["slug"]
+
+        result_text = (
+            "VERDICT: approved\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: valid\n"
+            "PLAN_ADHERENCE: followed\n"
+            "SUGGESTIONS: none\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        assert len(mem["entries"]) == 1
+        entry = mem["entries"][0]
+        assert entry["plan_adherence"] == "followed"
+        assert "plan_adherence" not in [v.split(":")[0] for v in entry["violations"]]
+
+    def test_parses_plan_adherence_violated(self, tmp_path):
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s2")
+        slug = meta["slug"]
+
+        result_text = (
+            "VERDICT: needs_revision\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: valid\n"
+            "PLAN_ADHERENCE: violated - step 2 was skipped\n"
+            "SUGGESTIONS: re-run step 2\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        entry = mem["entries"][0]
+        assert entry["plan_adherence"].startswith("violated")
+        assert any("plan_adherence" in v for v in entry["violations"])
+
+    def test_missing_plan_adherence_defaults_to_unknown(self, tmp_path):
+        from aqualib.sdk.hooks import _save_reviewer_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s3")
+        slug = meta["slug"]
+
+        # Old-style result without PLAN_ADHERENCE field
+        result_text = (
+            "VERDICT: approved\n"
+            "VENDOR_PRIORITY: satisfied\n"
+            "PLAN_QUALITY: valid\n"
+            "SUGGESTIONS: none\n"
+        )
+        _save_reviewer_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "reviewer")
+        entry = mem["entries"][0]
+        assert entry["plan_adherence"] == "unknown"
+        # Should not add a violation for an unknown adherence field
+        assert not any("plan_adherence" in v for v in entry["violations"])
+

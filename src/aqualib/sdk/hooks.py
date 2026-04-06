@@ -38,13 +38,14 @@ def _save_reviewer_memory(
 ) -> None:
     """Extract reviewer verdict fields from *result_text* and persist to memory.
 
-    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, and SUGGESTIONS using
-    regex so the reviewer's decisions accumulate in ``memory/reviewer.json``
+    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, PLAN_ADHERENCE, and SUGGESTIONS
+    using regex so the reviewer's decisions accumulate in ``memory/reviewer.json``
     rather than being lost at session end.
     """
     verdict_match = re.search(r"VERDICT\s*:\s*(\S+)", result_text, re.IGNORECASE)
     vendor_match = re.search(r"VENDOR_PRIORITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     quality_match = re.search(r"PLAN_QUALITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    adherence_match = re.search(r"PLAN_ADHERENCE\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     suggestions_match = re.search(r"SUGGESTIONS\s*:\s*(.+?)(?:\n\n|$)", result_text, re.IGNORECASE | re.DOTALL)
 
     # Warn when the output doesn't match the expected reviewer format at all
@@ -54,11 +55,14 @@ def _save_reviewer_memory(
         logger.debug("Reviewer memory: could not parse VENDOR_PRIORITY from result text")
     if not quality_match:
         logger.debug("Reviewer memory: could not parse PLAN_QUALITY from result text")
+    if not adherence_match:
+        logger.debug("Reviewer memory: could not parse PLAN_ADHERENCE from result text")
 
     entry: dict[str, Any] = {
         "verdict": verdict_match.group(1).strip() if verdict_match else "unknown",
         "vendor_priority": vendor_match.group(1).strip() if vendor_match else "unknown",
         "plan_quality": quality_match.group(1).strip() if quality_match else "unknown",
+        "plan_adherence": adherence_match.group(1).strip() if adherence_match else "unknown",
         "suggestions": suggestions_match.group(1).strip() if suggestions_match else "",
         "violations": [],
     }
@@ -69,6 +73,8 @@ def _save_reviewer_memory(
         entry["violations"].append(f"vendor_priority: {entry['vendor_priority']}")
     if re.match(r"violated", entry["plan_quality"], re.IGNORECASE):
         entry["violations"].append(f"plan_quality: {entry['plan_quality']}")
+    if re.match(r"violated", entry["plan_adherence"], re.IGNORECASE):
+        entry["violations"].append(f"plan_adherence: {entry['plan_adherence']}")
 
     workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
 

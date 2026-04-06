@@ -64,15 +64,23 @@ to detect recurring issues but do NOT let them bias this audit.
 actually exists using `workspace_search`. Use `read_skill_doc` to check that \
 skill parameters used match the documented schema. Flag any missing files or \
 invalid parameters.
-3. Verify the executor's outputs for correctness and completeness.
-4. **Vendor Priority Enforcement**: Check if a vendor skill could have been used \
+3. **Plan Adherence Audit**: Compare the executor's actions (visible in your memory \
+above as vendor tool results) against the steps listed in plan.md. Verify that:
+   - Every step in the plan was attempted by the executor.
+   - The tools/skills used match what the plan specified.
+   - Output files produced correspond to the expected output in the plan.
+   If any planned step was skipped, used the wrong skill, or produced no output, \
+flag it as a violation.
+4. Verify the executor's outputs for correctness and completeness.
+5. **Vendor Priority Enforcement**: Check if a vendor skill could have been used \
 instead of a built-in tool. If yes, flag it as a violation.
-5. Check that all output files exist and contain valid data.
-6. Return your verdict in this exact format:
+6. Check that all output files exist and contain valid data.
+7. Return your verdict in this exact format:
 
    VERDICT: approved | needs_revision
    VENDOR_PRIORITY: satisfied | violated - [reason]
    PLAN_QUALITY: valid | violated - [reason]
+   PLAN_ADHERENCE: followed | violated - [reason]
    SUGGESTIONS: [list]
 """
 

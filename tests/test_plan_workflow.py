@@ -146,3 +146,14 @@ class TestAgentPrompts:
         reviewer = next(a for a in agents if a["name"] == "reviewer")
         assert "plan.md" in reviewer["prompt"]
         assert "Read the Plan First" in reviewer["prompt"]
+
+    def test_reviewer_prompt_audits_plan_adherence(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt must include a plan adherence audit step and verdict field."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        # Explicit plan adherence responsibility in the prompt
+        assert "Plan Adherence Audit" in reviewer["prompt"]
+        # PLAN_ADHERENCE appears in the verdict format the reviewer must emit
+        assert "PLAN_ADHERENCE" in reviewer["prompt"]
