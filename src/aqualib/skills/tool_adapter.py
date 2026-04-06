@@ -49,10 +49,9 @@ try:
         command: str = PydanticField(
             default="",
             description=(
-                "Full shell command to execute. Construct this after reading "
-                "read_library_doc and read_skill_doc. "
-                "Example: 'python clawbio.py run --input /path/to/data.csv "
-                "--output /path/to/results.json --trait-pos 3'"
+                "Full shell command to execute the vendor skill. You MUST first call "
+                "read_library_doc and read_skill_doc to learn the correct command format "
+                "— it varies per library and may change between versions."
             ),
         )
         parameters: dict = PydanticField(
@@ -447,8 +446,19 @@ async def _run_vendor_skill(
     legacy_output_file: "Path | None" = None
 
     if command:
+        # Pre-validate: reject obviously malformed commands before passing to shell
+        cmd_stripped = command.strip()
+        _INVALID_COMMANDS = {"--", "-", "run"}
+        if len(cmd_stripped) < 3 or cmd_stripped in _INVALID_COMMANDS:
+            return (
+                f"ERROR: Vendor skill '{meta.name}' received an invalid command: "
+                f"'{cmd_stripped}'. "
+                "You MUST call read_library_doc then read_skill_doc to learn the "
+                "correct full shell command format before retrying."
+            )
+
         proc = await asyncio.create_subprocess_shell(
-            command,
+            cmd_stripped,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(meta.vendor_root),

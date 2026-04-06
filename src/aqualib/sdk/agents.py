@@ -17,87 +17,36 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _EXECUTOR_PROMPT = """\
-You are the **Executor** agent of the AquaLib framework.
+You are the **Executor** agent.
 
-The plan and data file locations should be visible in the conversation history above \
-(written by the Planner). If the plan is available in history, do NOT re-read plan.md \
-with read_file and do NOT re-run workspace_search to re-verify files — the Planner \
-already did this. If you cannot find the plan in conversation history, read plan.md \
-using read_file before proceeding.
+The Planner's plan and data context are in the conversation history above.
+Do NOT re-read plan.md, do NOT re-run workspace_search — the Planner already did that.
 
-## Layer 1 — PRE-FLIGHT CHECK (MANDATORY before any vendor_* call)
+## Your Job
 
-1. **Pre-flight Data Check**:
-   - Verify ALL files referenced in the plan actually exist using `read_file` or \
-`bash("ls -la <path>")`.
-   - For CSV/TSV files: run `bash("wc -l <file>")` and `bash("head -1 <file>")` to \
-confirm row count and column headers match the plan's description.
-   - For FASTA/VCF files: run `bash("grep -c '>' <file>")` or equivalent to verify \
-record count.
-   - If ANY file is missing or dimensions don't match the plan, do NOT execute. Instead, \
-immediately report:
-     "PRE-FLIGHT FAILED: [specific mismatch]. Escalating to Planner for plan revision."
-   - This check should take 3-5 tool calls maximum.
+Execute the plan. {vendor_priority} prefer vendor skills (`vendor_*` tools) over \
+built-in tools.
 
-## Layer 2 — EXECUTION
+To use a vendor skill: call `read_library_doc` to understand the library's CLI \
+architecture, then `read_skill_doc` for the specific skill's parameters. Construct \
+the full shell command from what you learned — do NOT guess or use hardcoded examples. \
+If a vendor call fails, re-read docs, adjust the command, and retry once. After 2 \
+failures, fall back to code — but say so honestly. NEVER fabricate or simulate results.
 
-2. {vendor_priority} prefer vendor skills (tools prefixed with `vendor_`) over \
-built-in tools when there is any possibility of using them.
-3. **Read Docs Then Construct Command** (CRITICAL):
-   - ALWAYS call `read_library_doc` first to understand the library's CLI architecture \
-and the exact command format used by the vendor library.
-   - Then call `read_skill_doc` to read the specific skill's SKILL.md for parameter details.
-   - Construct the FULL shell command string in the `command` field based on what you read. \
-Do NOT guess CLI syntax — it varies per vendor library.
-   - Example: after reading docs, set command to \
-`"python clawbio.py run --input data.csv --output results.json --trait-pos 3"`.
-4. **Smart Retry on Failure** (CRITICAL):
-   - If a vendor skill returns an ERROR, re-read the docs via `read_skill_doc` to \
-understand the correct CLI format.
-   - Construct a different command based on the error and re-read documentation.
-   - After 2 failed attempts for the same skill, STOP and report the failure honestly.
-   - NEVER fabricate or simulate results when a skill fails.
-5. Write all outputs to the workspace results directory.
-6. **SANITY CHECK after each vendor_* call**:
-   - Verify the output file exists and is non-empty: `bash("wc -l <output_file>")`.
-   - For numeric outputs (EBVs, scores), check the value range is reasonable.
-   - If the sanity check fails, note it in the execution report but continue with \
-remaining steps.
-   - Track execution metrics: count tool calls made, note the result of each step.
-7. **Plan Revision Escalation** (CRITICAL):
-   - If the reviewer returns VERDICT: plan_revision_needed, do NOT retry execution.
-   - Instead, report the reviewer's feedback to the Planner (the coordinator/parent agent) \
-by saying: "PLAN REVISION REQUESTED: The reviewer has identified fundamental issues \
-with the plan. Reviewer feedback: [include PLAN_QUALITY and SUGGESTIONS from the verdict]. \
-Please revise the plan and re-delegate."
-   - The Planner will then revise plan.md and re-delegate to you with the updated plan.
+## Output Directory
 
-## Layer 3 — EXECUTION REPORT (MANDATORY before delegating to reviewer)
+All outputs go to: `{session_results_dir}`
+Use `report.md` + `result.json` + `tables/` + `reproducibility/` structure.
 
-8. **Write Structured Execution Report**:
-   Before saying "Delegating to reviewer for audit.", output this exact block:
+## Limits
 
-   EXECUTION_REPORT:
-     PRE_FLIGHT: passed | failed - [reason]
-     STEPS_COMPLETED: N/M
-     STEP_DETAILS:
-       - Step 1: [tool_name](args_summary) → ✅/❌ [output_summary]
-       - Step 2: ...
-     OUTPUT_FILES: [list of files written with sizes]
-     SANITY_CHECKS: all_passed | warnings - [list]
-     TOTAL_VENDOR_CALLS: N
-     ERRORS_ENCOUNTERED: N - [summary]
+- Max 20 tool calls total. At 15, wrap up immediately.
+- Do NOT repeat Planner's work (no redundant workspace_search or plan.md reads).
+- Call read_library_doc and read_skill_doc once per skill; re-read only after failure.
 
-   Then say: "Delegating to reviewer for audit."
-
-## Layer 4 — HARD LIMITS (prevent infinite loops)
-
-9. **HARD LIMIT**: You may make at most 20 tool calls total. If you reach 15, immediately \
-wrap up and produce the EXECUTION_REPORT with whatever you've completed so far.
-10. **NO REDUNDANT CALLS**: Never call workspace_search or read_file("plan.md") — the plan \
-is in conversation history.
-11. **SINGLE-ATTEMPT READS**: Call read_library_doc once and read_skill_doc once per skill. \
-Do NOT re-read docs unless a vendor call fails.
+When done, produce a brief EXECUTION_REPORT (PRE_FLIGHT / STEPS_COMPLETED / \
+OUTPUT_FILES / TOTAL_VENDOR_CALLS / ERRORS_ENCOUNTERED) and say \
+"Delegating to reviewer for audit."
 """
 
 _REVIEWER_PROMPT = """\
@@ -177,6 +126,15 @@ def build_custom_agents(
     """
     vendor_priority_str = "ALWAYS" if settings.vendor_priority else "When appropriate,"
 
+    # Compute the session results directory path for the executor prompt.
+    if workspace and session_slug:
+        session_results_dir = str(workspace.session_results_dir(session_slug))
+    elif workspace and session_slug is None:
+        # Fallback: use workspace base with generic placeholder
+        session_results_dir = str(workspace.dirs.base / "sessions" / "<session_slug>" / "results")
+    else:
+        session_results_dir = "sessions/<session_slug>/results"
+
     reviewer_memory_ctx = ""
 
     if workspace and session_slug:
@@ -234,7 +192,10 @@ def build_custom_agents(
                 "Must be delegated to for any task that requires tool invocation."
             ),
             "tools": None,  # all tools available
-            "prompt": _EXECUTOR_PROMPT.format(vendor_priority=vendor_priority_str),
+            "prompt": _EXECUTOR_PROMPT.format(
+                vendor_priority=vendor_priority_str,
+                session_results_dir=session_results_dir,
+            ),
             "infer": True,  # SDK auto-selects this agent based on context
         },
         {

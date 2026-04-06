@@ -136,7 +136,7 @@ class TestAgentPrompts:
         executor = next(a for a in agents if a["name"] == "executor")
         assert "plan.md" in executor["prompt"]
         # Executor trusts conversation history — it should NOT redundantly re-read plan.md
-        assert "do NOT re-read plan.md" in executor["prompt"]
+        assert "NOT re-read plan.md" in executor["prompt"]
 
     def test_reviewer_prompt_reads_plan(self, settings: Settings, workspace: WorkspaceManager) -> None:
         """Reviewer prompt should instruct reading plan.md independently."""
@@ -180,15 +180,14 @@ class TestAgentPrompts:
         assert "read_skill_doc" in reviewer["tools"]
 
     def test_executor_prompt_handles_plan_revision(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Executor prompt must describe escalation when Reviewer requests plan revision."""
-        from aqualib.sdk.agents import build_custom_agents
+        """Plan revision loop must be present in the system prompt (Planner's responsibility)."""
+        from aqualib.sdk.system_prompt import build_system_message
 
-        agents = build_custom_agents(settings, workspace)
-        executor = next(a for a in agents if a["name"] == "executor")
-        assert "Plan Revision Escalation" in executor["prompt"]
-        assert "plan_revision_needed" in executor["prompt"]
-        # Executor should NOT retry execution on plan revision
-        assert "do NOT retry execution" in executor["prompt"]
+        msg = build_system_message(settings, workspace)
+        guidelines = msg["sections"]["guidelines"]["content"]
+        # Plan revision loop belongs in system_prompt, not in the executor's condensed prompt
+        assert "plan_revision_needed" in guidelines
+        assert "plan revision" in guidelines.lower()
 
     def test_planner_guidelines_include_plan_revision_loop(
         self, settings: Settings, workspace: WorkspaceManager,
