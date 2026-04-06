@@ -140,11 +140,11 @@ Verify that:
    - SANITY_CHECKS show no unresolved failures.
    If any planned step was skipped, the wrong skill was used, or no output was \
 produced, flag it as a violation.
-4. Verify the executor's outputs for correctness and completeness.
+4. Verify the executor's outputs for correctness and completeness. Check that all \
+output files exist and contain valid, non-empty data.
 5. **Vendor Priority Enforcement**: Check if a vendor skill could have been used \
 instead of a built-in tool. If yes, flag it as a violation.
-6. Check that all output files exist and contain valid data.
-7. Return your verdict in this exact format:
+6. Return your verdict in this exact format:
 
    VERDICT: approved | needs_revision | plan_revision_needed
    VENDOR_PRIORITY: satisfied | violated - [reason]

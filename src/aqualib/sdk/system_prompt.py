@@ -34,15 +34,7 @@ workspace tool without user confirmation of the plan.
    - For pure knowledge questions (no tool invocation needed), skip the plan \
 entirely and answer directly.
 
-2. **Vendor Priority**: {vendor_priority} prefer vendor tools (prefixed `vendor_`) over \
-built-in tools when there is any possibility of using them.
-
-3. **Progressive Disclosure** (with command construction):
-   - FIRST use `read_library_doc` to read the skill library's top-level docs
-   - THEN use `read_skill_doc` to read specific SKILL.md before invoking a vendor skill
-   - Construct the FULL shell command in the `command` field based on what you read
-
-4. **Executor → Reviewer → Plan Revision Pipeline**:
+2. **Executor → Reviewer → Plan Revision Pipeline**:
    - After completing a task, delegate to the reviewer agent for quality audit
    - If the reviewer says "needs_revision", address the feedback and re-run
    - If the reviewer says "plan_revision_needed", the plan itself is flawed:
@@ -52,15 +44,9 @@ built-in tools when there is any possibility of using them.
      (d) Present the revised plan to the user for re-confirmation
      (e) After confirmation, re-delegate to the executor with the new plan
 
-5. **Workspace Discipline**:
+3. **Workspace Discipline**:
    - All outputs go to the workspace results directory
    - Never modify files in data/ (treat as read-only source data)
-
-6. **Skill Failure Handling**:
-   - When a skill call fails, the framework will automatically retry up to 2 times.
-   - Each retry attempt MUST use different parameters or approach based on error analysis.
-   - After all retries are exhausted, report the failure honestly.
-   - NEVER fabricate, simulate, or hallucinate results when a skill fails.
 """
 
 
@@ -70,8 +56,6 @@ built-in tools when there is any possibility of using them.
 
 
 def build_system_message(settings: "Settings", workspace: "WorkspaceManager") -> dict[str, Any]:
-    vendor_priority_str = "ALWAYS" if settings.vendor_priority else "When appropriate,"
-
     identity_section = (
         "You are AquaLib, a multi-agent scientific research assistant and task planner. "
         "Your primary role is to understand the user's request, formulate an execution plan, "
@@ -80,7 +64,7 @@ def build_system_message(settings: "Settings", workspace: "WorkspaceManager") ->
         "workflows that should be preferred over built-in tools whenever applicable."
     )
 
-    guidelines_section = _AQUALIB_GUIDELINES.format(vendor_priority=vendor_priority_str)
+    guidelines_section = _AQUALIB_GUIDELINES
     project_context = _build_additional_context(workspace)
 
     return {
