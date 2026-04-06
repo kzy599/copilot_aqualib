@@ -247,6 +247,7 @@ class TestBuildCustomAgentsMemoryInjection:
         assert "Your previous audits" not in reviewer["prompt"]
 
     def test_only_injects_last_5_entries(self, workspace: WorkspaceManager, session_slug: str):
+        """vendor_tool_use entries in executor memory are NOT injected into the reviewer prompt."""
         from aqualib.config import Settings
         from aqualib.sdk.agents import build_custom_agents
 
@@ -268,13 +269,9 @@ class TestBuildCustomAgentsMemoryInjection:
         reviewer = next(a for a in agents if a["name"] == "reviewer")
         prompt = reviewer["prompt"]
 
-        # Should contain last 5 (task-3 through task-7), not older ones
-        assert "vendor_task_7" in prompt
-        assert "vendor_task_3" in prompt
-        # task-0, task-1, task-2 should NOT be in the injected context
-        assert "vendor_task_0" not in prompt
-        assert "vendor_task_1" not in prompt
-        assert "vendor_task_2" not in prompt
+        # vendor_tool_use entries must NOT appear in reviewer prompt (new memory model)
+        for i in range(8):
+            assert f"vendor_task_{i}" not in prompt
 
     def test_injects_execution_report_into_reviewer(
         self, workspace: WorkspaceManager, session_slug: str

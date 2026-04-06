@@ -200,3 +200,51 @@ class TestAgentPrompts:
         guidelines = msg["sections"]["guidelines"]["content"]
         assert "plan_revision_needed" in guidelines
         assert "Revise the plan" in guidelines
+
+
+# ---------------------------------------------------------------------------
+# Reviewer memory injection
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerMemoryInjection:
+    def test_reviewer_memory_injection_no_vendor_fragments(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer prompt must NOT contain vendor tool call fragments from executor memory."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        meta = workspace.create_session(name="inj-test")
+        slug = meta["slug"]
+
+        # Seed executor memory with a vendor_tool_use entry (legacy / stray entry)
+        workspace.append_agent_memory_entry(
+            slug,
+            "executor",
+            {
+                "event": "vendor_tool_use",
+                "tool": "vendor_hiblup_ebv",
+                "success": True,
+                "output_preview": "EBV done",
+            },
+        )
+
+        agents = build_custom_agents(settings, workspace, session_slug=slug)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "vendor tool calls" not in reviewer["prompt"]
+        assert "vendor_hiblup_ebv" not in reviewer["prompt"]
+
+    def test_reviewer_prompt_describes_memory_structure(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer prompt must reference Execution Report and Previous Verdicts memory sources."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "Execution Report" in reviewer["prompt"]
+        assert "Previous Verdicts" in reviewer["prompt"]
+        assert "did not produce execution report" in reviewer["prompt"]
+

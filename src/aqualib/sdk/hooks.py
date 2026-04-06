@@ -91,13 +91,13 @@ def _save_execution_report_memory(
     session_slug: str,
     result_text: str,
 ) -> None:
-    """Parse EXECUTION_REPORT from executor output and save to both executor and reviewer memory.
+    """Parse EXECUTION_REPORT from executor output and save to executor memory only.
 
     Parses five scalar fields — PRE_FLIGHT, STEPS_COMPLETED, TOTAL_VENDOR_CALLS,
     ERRORS_ENCOUNTERED, and SANITY_CHECKS — using regex, then persists as an
-    ``"execution_report"`` event in both executor and reviewer memory so the
-    reviewer receives a structured summary instead of raw 200-char output_preview
-    snippets.  Multi-line sub-sections (STEP_DETAILS, OUTPUT_FILES) are intentionally
+    ``"execution_report"`` event in executor memory.  The Reviewer reads this via
+    prompt injection in ``build_custom_agents``.  Multi-line sub-sections
+    (STEP_DETAILS, OUTPUT_FILES) are intentionally
     omitted to keep the memory entry compact.
     """
     pre_flight_match = re.search(r"PRE_FLIGHT\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
@@ -120,7 +120,6 @@ def _save_execution_report_memory(
     }
 
     workspace.append_agent_memory_entry(session_slug, "executor", entry)
-    workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
 
 
 # ---------------------------------------------------------------------------
@@ -375,33 +374,6 @@ def _make_post_tool_hook(
                 _save_execution_report_memory(workspace, session_slug, result_text)
             except Exception:
                 logger.debug("Failed to save execution report memory", exc_info=True)
-
-        # Auto-capture executor memory when a vendor_* tool completes,
-        # and bridge the result to reviewer memory so the reviewer can
-        # audit independently without needing the executor's conversation.
-        if session_slug and tool_name.startswith("vendor_"):
-            vendor_entry = {
-                "event": "vendor_tool_use",
-                "tool": tool_name,
-                "success": not input_data.get("toolError"),
-                "output_preview": result_text[:200],
-            }
-            try:
-                workspace.append_agent_memory_entry(
-                    session_slug,
-                    "executor",
-                    vendor_entry,
-                )
-            except Exception:
-                logger.debug("Failed to save executor memory", exc_info=True)
-            try:
-                workspace.append_agent_memory_entry(
-                    session_slug,
-                    "reviewer",
-                    vendor_entry,
-                )
-            except Exception:
-                logger.debug("Failed to save reviewer memory for vendor tool", exc_info=True)
 
         return None
 

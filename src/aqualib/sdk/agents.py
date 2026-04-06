@@ -111,8 +111,13 @@ checking outputs directly.
 Your responsibilities:
 0. **Read the Plan First**: Call `read_file` to read `plan.md` from the session \
 directory. This is mandatory — you cannot audit without the plan.
-1. **Load Your Memory**: Your previous verdicts may be provided above. Use them \
-to detect recurring issues but do NOT let them bias this audit.
+1. **Load Your Memory**: Two memory sources are injected above:
+   - **Executor's Execution Report** (PRE_FLIGHT, STEPS_COMPLETED, OUTPUT_FILES, \
+SANITY_CHECKS, ERRORS_ENCOUNTERED) — produced by the Executor for this cycle.
+   - **Your Previous Verdicts** from prior review cycles — use them to detect \
+recurring issues but do NOT let them bias this audit.
+   If no execution report is present in the injected memory, flag PLAN_ADHERENCE \
+as violated with reason "Executor did not produce execution report".
 2. **Plan Reasonableness Audit** (CRITICAL):
    Evaluate whether the plan ITSELF is sound and achievable:
    - Are the planned steps logical and in the correct order?
@@ -125,13 +130,16 @@ to verify capability.
 mismatched skills, missing prerequisites), set PLAN_QUALITY to "revision_needed" \
 with a clear explanation. This will cause the plan to be sent back to the \
 Planner for revision.
-3. **Plan Adherence Audit**: Compare the executor's actions (visible in your memory \
-above as vendor tool results) against the steps listed in plan.md. Verify that:
-   - Every step in the plan was attempted by the executor.
-   - The tools/skills used match what the plan specified.
-   - Output files produced correspond to the expected output in the plan.
-   If any planned step was skipped, used the wrong skill, or produced no output, \
-flag it as a violation.
+3. **Plan Adherence Audit**: Compare the EXECUTION_REPORT fields (PRE_FLIGHT, \
+STEPS_COMPLETED, OUTPUT_FILES, SANITY_CHECKS) against the steps listed in plan.md. \
+Verify that:
+   - Every step in the plan was attempted (check STEPS_COMPLETED ratio).
+   - PRE_FLIGHT passed before execution began.
+   - Output files produced correspond to the expected output in the plan \
+(check OUTPUT_FILES).
+   - SANITY_CHECKS show no unresolved failures.
+   If any planned step was skipped, the wrong skill was used, or no output was \
+produced, flag it as a violation.
 4. Verify the executor's outputs for correctness and completeness.
 5. **Vendor Priority Enforcement**: Check if a vendor skill could have been used \
 instead of a built-in tool. If yes, flag it as a violation.
@@ -177,20 +185,6 @@ def build_custom_agents(
         exec_mem = workspace.load_agent_memory(session_slug, "executor")
 
         reviewer_memory_ctx_parts: list[str] = []
-
-        # Executor's recent vendor tool results bridged to reviewer
-        exec_vendor_entries = [
-            e for e in exec_mem.get("entries", [])
-            if e.get("event") == "vendor_tool_use"
-        ]
-        if exec_vendor_entries:
-            reviewer_memory_ctx_parts.append("Executor's recent vendor tool calls:")
-            for e in exec_vendor_entries[-5:]:
-                status = "✅ success" if e.get("success") else "❌ failed"
-                reviewer_memory_ctx_parts.append(
-                    f"  - {e.get('tool', '?')} → {status}: "
-                    f"{str(e.get('output_preview', 'N/A'))[:80]}"
-                )
 
         # Bridge the most recent EXECUTION_REPORT to reviewer context
         exec_report_entries = [

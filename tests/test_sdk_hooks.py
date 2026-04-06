@@ -561,8 +561,8 @@ class TestSaveExecutionReportMemory:
         assert entry["errors_encountered"] == "0"
         assert entry["sanity_checks"] == "all_passed"
 
-    def test_bridges_to_reviewer_memory(self, tmp_path):
-        """Execution report is saved to both executor and reviewer memory."""
+    def test_report_only_in_executor_memory(self, tmp_path):
+        """Execution report is saved to executor memory only, NOT reviewer memory."""
         from aqualib.sdk.hooks import _save_execution_report_memory
 
         ws = self._make_workspace(tmp_path)
@@ -579,9 +579,13 @@ class TestSaveExecutionReportMemory:
         )
         _save_execution_report_memory(ws, slug, result_text)
 
+        exec_mem = ws.load_agent_memory(slug, "executor")
+        report_entries = [e for e in exec_mem["entries"] if e.get("event") == "execution_report"]
+        assert len(report_entries) == 1
+
         rev_mem = ws.load_agent_memory(slug, "reviewer")
-        assert len(rev_mem["entries"]) == 1
-        assert rev_mem["entries"][0]["event"] == "execution_report"
+        rev_report_entries = [e for e in rev_mem.get("entries", []) if e.get("event") == "execution_report"]
+        assert len(rev_report_entries) == 0
 
     def test_pre_flight_failed(self, tmp_path):
         """PRE_FLIGHT: failed is parsed correctly."""
@@ -667,4 +671,30 @@ class TestSaveExecutionReportMemory:
         exec_mem = ws.load_agent_memory(slug, "executor")
         report_entries = [e for e in exec_mem["entries"] if e.get("event") == "execution_report"]
         assert len(report_entries) == 0
+
+    @pytest.mark.asyncio
+    async def test_vendor_tool_use_not_stored_in_memory(self, tmp_path):
+        """vendor_* tool completions do NOT create vendor_tool_use entries in executor or reviewer memory."""
+        from aqualib.sdk.hooks import _make_post_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="s7")
+        slug = meta["slug"]
+
+        hook = _make_post_tool_hook(ws, session_slug=slug)
+        await hook(
+            {
+                "toolName": "vendor_hiblup_ebv",
+                "toolResult": "EBV computation complete. Output: sel_ebv.csv",
+            },
+            None,
+        )
+
+        exec_mem = ws.load_agent_memory(slug, "executor")
+        exec_vendor = [e for e in exec_mem.get("entries", []) if e.get("event") == "vendor_tool_use"]
+        assert len(exec_vendor) == 0
+
+        rev_mem = ws.load_agent_memory(slug, "reviewer")
+        rev_vendor = [e for e in rev_mem.get("entries", []) if e.get("event") == "vendor_tool_use"]
+        assert len(rev_vendor) == 0
 
