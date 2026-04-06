@@ -45,7 +45,13 @@ class AquaLibClient:
             ) from exc
 
         config = self._build_config(SubprocessConfig)
-        self._client = CopilotClient(config)
+        kwargs: dict[str, Any] = {}
+        if self.settings.telemetry.enabled and self.settings.telemetry.otlp_endpoint:
+            kwargs["telemetry"] = {
+                "otlp_endpoint": self.settings.telemetry.otlp_endpoint,
+                "capture_content": self.settings.telemetry.capture_content,
+            }
+        self._client = CopilotClient(config, **kwargs)
         await self._client.start()
         logger.info("CopilotClient started (auth=%s)", self.settings.copilot.auth)
         return self._client

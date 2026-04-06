@@ -105,19 +105,21 @@ class TestSystemPrompt:
         from aqualib.sdk.system_prompt import build_system_message
 
         msg = build_system_message(settings, workspace)
-        # In override mode, content is a flat string
-        content = msg["content"]
-        assert "Plan-First" in content
-        assert "write_plan" in content
+        # In customize mode, guidelines are in sections
+        assert msg["mode"] == "customize"
+        guidelines = msg["sections"]["guidelines"]["content"]
+        assert "Plan-First" in guidelines
+        assert "write_plan" in guidelines
 
     def test_identity_mentions_planner(self, settings: Settings, workspace: WorkspaceManager) -> None:
         """Identity section should describe AquaLib as a task planner."""
         from aqualib.sdk.system_prompt import build_system_message
 
         msg = build_system_message(settings, workspace)
-        # In override mode, identity is embedded in the flat content string
-        content = msg["content"]
-        assert "task planner" in content
+        # In customize mode, identity is in sections
+        assert msg["mode"] == "customize"
+        identity = msg["sections"]["identity"]["content"]
+        assert "task planner" in identity
 
 
 # ---------------------------------------------------------------------------

@@ -152,6 +152,18 @@ def run(
                             "violations": _extract_violations(content),
                             "suggestions": _extract_suggestions(content),
                         })
+                elif type_val == "session.compaction_start":
+                    rprint("[dim]📦 Context compaction started...[/dim]")
+                elif type_val == "session.compaction_complete":
+                    tokens_before = getattr(data, "tokens_before", None)
+                    tokens_after = getattr(data, "tokens_after", None)
+                    if tokens_before is not None and tokens_after is not None:
+                        rprint(
+                            f"[dim]✅ Compaction complete: {tokens_before} → "
+                            f"{tokens_after} tokens[/dim]"
+                        )
+                    else:
+                        rprint("[dim]✅ Context compaction complete.[/dim]")
                 elif type_val == "session.idle":
                     done.set()
 
@@ -349,6 +361,18 @@ def chat(
                             "violations": _extract_violations(content),
                             "suggestions": _extract_suggestions(content),
                         })
+                elif type_val == "session.compaction_start":
+                    rprint("[dim]📦 Context compaction started...[/dim]")
+                elif type_val == "session.compaction_complete":
+                    tokens_before = getattr(data, "tokens_before", None)
+                    tokens_after = getattr(data, "tokens_after", None)
+                    if tokens_before is not None and tokens_after is not None:
+                        rprint(
+                            f"[dim]✅ Compaction complete: {tokens_before} → "
+                            f"{tokens_after} tokens[/dim]"
+                        )
+                    else:
+                        rprint("[dim]✅ Context compaction complete.[/dim]")
                 elif type_val == "session.idle":
                     turn_state["done"].set()
 

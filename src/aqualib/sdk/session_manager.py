@@ -11,15 +11,21 @@ Session ID format:   ``aqualib-<name-slug>-<8-char-uuid>``
 from __future__ import annotations
 
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rich import print as rprint
+from rich.console import Console
+
 from aqualib.config import Settings
 
 if TYPE_CHECKING:
     from aqualib.workspace.manager import WorkspaceManager
+
+_console = Console()
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +116,7 @@ class SessionManager:
             system_message=build_system_message(self.settings, self.workspace),
             hooks=build_hooks(self.settings, self.workspace, slug),
             on_permission_request=self._build_permission_handler(),
+            on_user_input_request=self._build_user_input_handler(),
             infinite_sessions={
                 "enabled": True,
                 "background_compaction_threshold": 0.80,
@@ -132,6 +139,7 @@ class SessionManager:
         return await self.client.resume_session(
             session_id,
             on_permission_request=self._build_permission_handler(),
+            on_user_input_request=self._build_user_input_handler(),
             provider=self._build_provider(),
             tools=build_tools_from_skills(self.settings, self.workspace, session_slug=slug),
             skill_directories=self._collect_skill_dirs(),
@@ -189,24 +197,102 @@ class SessionManager:
         return config
 
     def _build_permission_handler(self):
-        """Return a permission request handler that allows all tool calls."""
+        """Return a permission request handler with workspace-scoped safety rules.
+
+        - ``write``: deny if the target path is outside the workspace base dir.
+        - ``shell``: deny known dangerous command patterns.
+        - All other kinds (read, mcp, custom_tool, url, memory, hook): allow.
+        """
+        base_dir = os.path.normcase(str(self.workspace.dirs.base))
+
+        # Regex patterns for dangerous shell commands; covers common variations
+        # (extra spaces, flags, etc.) of each dangerous operation.
+        _DANGEROUS_RE = re.compile(
+            r"rm\s+-[^\s]*r[^\s]*\s+/"          # rm -rf / and variants
+            r"|DROP\s+TABLE"                      # SQL DROP TABLE
+            r"|mkfs(\.[a-z0-9]+)?\s"             # mkfs / mkfs.ext4 etc.
+            r"|dd\s+if=",                         # dd if= (disk wipe)
+            re.IGNORECASE,
+        )
+
+        def _get_field(request: Any, field: str, default: str = "") -> str:
+            if isinstance(request, dict):
+                return request.get(field, default) or default
+            return getattr(request, field, default) or default
+
+        def _is_safe_write(request: Any) -> bool:
+            path = _get_field(request, "path") or _get_field(request, "file")
+            if not path:
+                return True
+            try:
+                resolved = os.path.normcase(str(Path(path).resolve()))
+                return resolved.startswith(base_dir)
+            except Exception:
+                return False
+
+        def _is_safe_shell(request: Any) -> bool:
+            cmd = _get_field(request, "command") or _get_field(request, "cmd")
+            if not cmd:
+                return True
+            return not bool(_DANGEROUS_RE.search(cmd))
+
+        def _should_allow(request: Any) -> bool:
+            kind = _get_field(request, "kind")
+            if kind == "write":
+                return _is_safe_write(request)
+            if kind == "shell":
+                return _is_safe_shell(request)
+            return True  # read, mcp, custom_tool, url, memory, hook are safe
+
         try:
-            from copilot.session import PermissionHandler
-            return PermissionHandler.approve_all
+            from copilot.session import PermissionRequestResult  # type: ignore[import]
+
+            async def on_permission_request(request: Any, invocation: Any) -> Any:
+                if _should_allow(request):
+                    return PermissionRequestResult(kind="approved")
+                logger.warning(
+                    "Permission denied for %s request: %r",
+                    _get_field(request, "kind"),
+                    request,
+                )
+                return PermissionRequestResult(kind="denied")
+
+            return on_permission_request
         except ImportError:
             pass
-        try:
-            from copilot.session import PermissionRequestResult
 
-            async def on_permission_request(input_data: Any, invocation: Any):
-                return PermissionRequestResult(kind="approved")
-
-            return on_permission_request
-        except ImportError:
-            async def on_permission_request(input_data: Any, invocation: Any) -> dict:
+        async def on_permission_request_dict(input_data: Any, invocation: Any) -> dict:
+            if _should_allow(input_data):
                 return {"permissionDecision": "allow"}
+            logger.warning(
+                "Permission denied for %s request: %r",
+                _get_field(input_data, "kind"),
+                input_data,
+            )
+            return {"permissionDecision": "deny"}
 
-            return on_permission_request
+        return on_permission_request_dict
+
+    def _build_user_input_handler(self):
+        """Return an async callback for agent-initiated user input requests."""
+
+        async def on_user_input_request(request: Any) -> dict:
+            if isinstance(request, dict):
+                question = request.get("question", "")
+                choices = request.get("choices", []) or []
+            else:
+                question = getattr(request, "question", "") or ""
+                choices = getattr(request, "choices", []) or []
+
+            rprint(f"\n[bold cyan]🤔 Agent question:[/bold cyan] {question}")
+            if choices:
+                for i, choice in enumerate(choices, 1):
+                    rprint(f"  [dim]{i}. {choice}[/dim]")
+
+            user_input = _console.input("[bold]> [/bold]")
+            return {"answer": user_input, "wasFreeform": True}
+
+        return on_user_input_request
 
     # ------------------------------------------------------------------
     # Legacy compatibility shim

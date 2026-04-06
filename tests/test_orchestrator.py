@@ -305,3 +305,175 @@ class TestSessionManager:
         assert provider["type"] == "openai"
         assert provider["base_url"] == "http://localhost:11434/v1"
         assert provider["api_key"] == "test-key"
+
+    # ------------------------------------------------------------------
+    # _build_permission_handler helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _perm_decision(result) -> str:
+        """Extract the allow/deny decision from either a PermissionRequestResult object or a dict."""
+        if hasattr(result, "kind"):
+            # SDK PermissionRequestResult: kind is "approved" or "denied"
+            return "allow" if result.kind == "approved" else "deny"
+        # dict-based fallback: permissionDecision is "allow" or "deny"
+        return result.get("permissionDecision", "")
+
+    # ------------------------------------------------------------------
+    # _build_permission_handler
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_allows_safe_write(self, tmp_path: Path):
+        """Write to a path inside the workspace is allowed."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        request = {"kind": "write", "path": str(tmp_path / "results" / "out.txt")}
+        result = await handler(request, None)
+        assert self._perm_decision(result) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_denies_write_outside_workspace(self, tmp_path: Path):
+        """Write to a path outside the workspace is denied."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        request = {"kind": "write", "path": "/etc/passwd"}
+        result = await handler(request, None)
+        assert self._perm_decision(result) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_denies_dangerous_shell(self, tmp_path: Path):
+        """Shell command with dangerous pattern is denied."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        dangerous_cmds = [
+            "rm -rf /",
+            "rm  -rf /",
+            "mkfs /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            "DROP TABLE users",
+        ]
+        for dangerous_cmd in dangerous_cmds:
+            request = {"kind": "shell", "command": dangerous_cmd}
+            result = await handler(request, None)
+            assert self._perm_decision(result) == "deny", (
+                f"Expected deny for: {dangerous_cmd}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_allows_safe_shell(self, tmp_path: Path):
+        """Ordinary shell commands are allowed."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        request = {"kind": "shell", "command": "ls -la /tmp"}
+        result = await handler(request, None)
+        assert self._perm_decision(result) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_allows_other_kinds(self, tmp_path: Path):
+        """Non-write, non-shell kinds (read, mcp, custom_tool, url, memory) are allowed."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        for kind in ("read", "mcp", "custom_tool", "url", "memory", "hook"):
+            request = {"kind": kind}
+            result = await handler(request, None)
+            assert self._perm_decision(result) == "allow", (
+                f"Expected allow for kind={kind}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_works_with_object_style_request(self, tmp_path: Path):
+        """Handler works when request is an object with attributes (SDK style)."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="perm-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_permission_handler()
+
+        # Simulate an SDK object with attributes
+        request = MagicMock()
+        request.kind = "shell"
+        request.command = "rm -rf /"
+        result = await handler(request, None)
+        assert self._perm_decision(result) == "deny"
+
+    # ------------------------------------------------------------------
+    # _build_user_input_handler
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_user_input_handler_returns_answer(self, tmp_path: Path, monkeypatch):
+        """User input handler returns the typed answer."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="input-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_user_input_handler()
+
+        monkeypatch.setattr("aqualib.sdk.session_manager._console.input", lambda _: "5e-8")
+
+        result = await handler({"question": "Which p-value threshold?", "choices": []})
+        assert result["answer"] == "5e-8"
+        assert result["wasFreeform"] is True
+
+    @pytest.mark.asyncio
+    async def test_user_input_handler_works_with_object_request(self, tmp_path: Path, monkeypatch):
+        """User input handler works with object-style requests."""
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="input-test")
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+
+        from aqualib.sdk.session_manager import SessionManager
+
+        sm = SessionManager(None, settings, workspace)
+        handler = sm._build_user_input_handler()
+
+        monkeypatch.setattr("aqualib.sdk.session_manager._console.input", lambda _: "yes")
+
+        request = MagicMock()
+        request.question = "Proceed with analysis?"
+        request.choices = ["yes", "no"]
+        result = await handler(request)
+        assert result["answer"] == "yes"
+        assert result["wasFreeform"] is True
