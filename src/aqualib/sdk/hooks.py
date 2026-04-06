@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_ADDITIONAL_CONTEXT_CHARS = 4000  # Hard cap for additionalContext injected at session start
+_MAX_ADDITIONAL_CONTEXT_CHARS = 2000  # Hard cap for additionalContext injected at session start
 # ---------------------------------------------------------------------------
 
 
@@ -38,13 +38,20 @@ def _save_reviewer_memory(
 ) -> None:
     """Extract reviewer verdict fields from *result_text* and persist to memory.
 
-    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, and SUGGESTIONS using
-    regex so the reviewer's decisions accumulate in ``memory/reviewer.json``
+    Parses VERDICT, VENDOR_PRIORITY, PLAN_QUALITY, PLAN_ADHERENCE, and SUGGESTIONS
+    using regex so the reviewer's decisions accumulate in ``memory/reviewer.json``
     rather than being lost at session end.
+
+    PLAN_QUALITY supports three states:
+    - ``valid`` — plan is sound
+    - ``violated`` — minor issues (missing files, bad params)
+    - ``revision_needed`` — the plan is fundamentally flawed and must be revised
+      by the Planner before re-execution
     """
     verdict_match = re.search(r"VERDICT\s*:\s*(\S+)", result_text, re.IGNORECASE)
     vendor_match = re.search(r"VENDOR_PRIORITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     quality_match = re.search(r"PLAN_QUALITY\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    adherence_match = re.search(r"PLAN_ADHERENCE\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
     suggestions_match = re.search(r"SUGGESTIONS\s*:\s*(.+?)(?:\n\n|$)", result_text, re.IGNORECASE | re.DOTALL)
 
     # Warn when the output doesn't match the expected reviewer format at all
@@ -54,21 +61,27 @@ def _save_reviewer_memory(
         logger.debug("Reviewer memory: could not parse VENDOR_PRIORITY from result text")
     if not quality_match:
         logger.debug("Reviewer memory: could not parse PLAN_QUALITY from result text")
+    if not adherence_match:
+        logger.debug("Reviewer memory: could not parse PLAN_ADHERENCE from result text")
 
     entry: dict[str, Any] = {
         "verdict": verdict_match.group(1).strip() if verdict_match else "unknown",
         "vendor_priority": vendor_match.group(1).strip() if vendor_match else "unknown",
         "plan_quality": quality_match.group(1).strip() if quality_match else "unknown",
+        "plan_adherence": adherence_match.group(1).strip() if adherence_match else "unknown",
         "suggestions": suggestions_match.group(1).strip() if suggestions_match else "",
         "violations": [],
     }
 
-    # Collect violations: check that the field value *starts with* "violated"
-    # to avoid false positives from phrases like "not violated".
+    # Collect violations: "violated" = minor issue; "revision_needed" = plan must be revised
     if re.match(r"violated", entry["vendor_priority"], re.IGNORECASE):
         entry["violations"].append(f"vendor_priority: {entry['vendor_priority']}")
     if re.match(r"violated", entry["plan_quality"], re.IGNORECASE):
         entry["violations"].append(f"plan_quality: {entry['plan_quality']}")
+    if re.match(r"revision_needed", entry["plan_quality"], re.IGNORECASE):
+        entry["violations"].append(f"plan_quality: {entry['plan_quality']}")
+    if re.match(r"violated", entry["plan_adherence"], re.IGNORECASE):
+        entry["violations"].append(f"plan_adherence: {entry['plan_adherence']}")
 
     workspace.append_agent_memory_entry(session_slug, "reviewer", entry)
 
@@ -82,6 +95,7 @@ def build_hooks(
     settings: "Settings",
     workspace: "WorkspaceManager",
     session_slug: str | None = None,
+    skill_metas: "list | None" = None,
 ) -> dict:
     """Build and return the complete hook dict for a Copilot SDK session."""
     # Shared state: tracks which doc tools the model has called this session.
@@ -90,7 +104,7 @@ def build_hooks(
     _doc_tools_called: set[str] = set()
 
     return {
-        "on_session_start": _make_session_start_hook(workspace),
+        "on_session_start": _make_session_start_hook(workspace, skill_metas=skill_metas),
         "on_user_prompt_submitted": _make_prompt_hook(workspace, session_slug),
         "on_pre_tool_use": _make_pre_tool_hook(settings, workspace, session_slug, _doc_tools_called),
         "on_post_tool_use": _make_post_tool_hook(workspace, session_slug, _doc_tools_called),
@@ -104,7 +118,7 @@ def build_hooks(
 # ---------------------------------------------------------------------------
 
 
-def _make_session_start_hook(workspace: "WorkspaceManager"):
+def _make_session_start_hook(workspace: "WorkspaceManager", skill_metas: "list | None" = None):
     async def on_session_start(input_data: dict[str, Any], invocation: Any) -> dict | None:
         """Inject project context + vendor skill overview into the session."""
         project = workspace.load_project()
@@ -130,38 +144,33 @@ def _make_session_start_hook(workspace: "WorkspaceManager"):
                     f"(skills: {', '.join(e.get('skills_used', []))})"
                 )
 
-        # Vendor skill overview (progressive disclosure Level 1)
+        # Vendor skill overview: inject count + names only (progressive disclosure Level 1)
+        # Use pre-scanned skill_metas if provided to avoid duplicate file I/O.
         try:
-            from aqualib.skills.scanner import scan_all_skill_dirs
+            if skill_metas is not None:
+                skills = skill_metas
+            else:
+                from aqualib.skills.scanner import scan_all_skill_dirs
 
-            skills = scan_all_skill_dirs(workspace.settings, workspace)
+                skills = scan_all_skill_dirs(workspace.settings, workspace)
             if skills:
-                context_parts.append(f"\nAvailable vendor skills ({len(skills)}):")
-                for s in skills:
-                    context_parts.append(f"  - vendor_{s.name}: {s.description[:80]}")
+                skill_names = ", ".join(f"vendor_{s.name}" for s in skills)
                 context_parts.append(
-                    "\nUse 'read_skill_doc' tool for full documentation before invoking."
+                    f"\nAvailable vendor skills ({len(skills)}): {skill_names}. "
+                    "Use 'read_library_doc' then 'read_skill_doc' for full documentation."
                 )
         except Exception:
             logger.debug("Could not load vendor skills for session context.", exc_info=True)
 
-        # Library-level documentation (progressive disclosure Level 0)
+        # Library names only (not full doc content — use read_library_doc on demand)
         repo_vendor = Path(__file__).resolve().parent.parent.parent.parent / "vendor"
         if repo_vendor.is_dir():
             lib_dirs = [d for d in sorted(repo_vendor.iterdir()) if d.is_dir()]
-            for lib_dir in lib_dirs:
-                for doc_name in ("llms.txt", "AGENTS.md"):
-                    doc = lib_dir / doc_name
-                    if doc.exists():
-                        context_parts.append(
-                            f"\n## Library: {lib_dir.name}\n"
-                            f"{doc.read_text(encoding='utf-8')[:500]}"
-                        )
-                        break
             if lib_dirs:
+                lib_names = ", ".join(d.name for d in lib_dirs)
                 context_parts.append(
-                    "\nUse 'read_library_doc' tool for full library documentation "
-                    "before reading individual SKILL.md files."
+                    f"Vendor libraries: {lib_names}. "
+                    "Use 'read_library_doc' for full library documentation."
                 )
 
         if not context_parts:
@@ -212,16 +221,23 @@ def _make_pre_tool_hook(
     if doc_tools_called is None:
         doc_tools_called = set()
 
+    _vendor_reminder_sent = [False]  # mutable flag: fires once per session
+
+    # Utility tools that should never trigger the vendor priority reminder
+    _UTILITY_TOOLS = frozenset({"workspace_search", "read_skill_doc", "read_library_doc", "write_plan"})
+
     async def on_pre_tool_use(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, Any]:
         """Doc-first gate + vendor priority check + pre-execution audit record.
 
         If a vendor_* tool is invoked before any documentation has been read
-        in this session, block the call and instruct the model to read docs first.
+        in this session, allow the call but warn the model to read docs first.
+        (Using 'allow' instead of 'block' avoids wasting a full LLM turn; the
+        model gets an informative warning message alongside the tool result.)
 
-        If vendor skills are available but the agent chose a built-in tool,
-        return an ``additionalContext`` reminder to steer the agent back.
+        If vendor skills are available but the agent chose a non-utility built-in
+        tool, return an ``additionalContext`` reminder once per session.
         """
         tool_name = input_data.get("toolName", "")
 
@@ -234,27 +250,33 @@ def _make_pre_tool_hook(
             entry["session_slug"] = session_slug
         workspace.append_audit_entry(entry)
 
-        # Doc-first gate: block vendor tool calls until docs have been read.
+        # Doc-first gate: warn (but allow) vendor tool calls until docs have been read.
         # `not doc_tools_called` is True when the set is empty (no docs read yet).
         if tool_name.startswith("vendor_") and not doc_tools_called:
             return {
-                "permissionDecision": "block",
+                "permissionDecision": "allow",
                 "additionalContext": (
-                    "⛔ DOC-FIRST GATE: You must read documentation before invoking vendor tools. "
-                    "Call read_library_doc first to understand the library's CLI format and "
-                    "architecture, then read_skill_doc for the specific skill parameters. "
+                    "⚠️ DOC-FIRST WARNING: You are invoking a vendor tool before reading "
+                    "documentation. Call read_library_doc first to understand the library's "
+                    "CLI format, then read_skill_doc for the specific skill parameters. "
                     "Then retry the vendor tool call with the 'command' field set to the full "
                     "shell command string."
                 ),
             }
 
-        # Vendor priority reminder
-        if settings.vendor_priority and not tool_name.startswith("vendor_"):
+        # Vendor priority reminder: fires once per session, skips utility tools
+        if (
+            settings.vendor_priority
+            and not _vendor_reminder_sent[0]
+            and not tool_name.startswith("vendor_")
+            and tool_name not in _UTILITY_TOOLS
+        ):
             vendor_skills = [
                 t for t in input_data.get("availableTools", [])
                 if str(t).startswith("vendor_")
             ]
             if vendor_skills:
+                _vendor_reminder_sent[0] = True
                 return {
                     "permissionDecision": "allow",
                     "additionalContext": (
@@ -310,21 +332,32 @@ def _make_post_tool_hook(
             except Exception:
                 logger.debug("Failed to save reviewer memory", exc_info=True)
 
-        # Auto-capture executor memory when a vendor_* tool completes
+        # Auto-capture executor memory when a vendor_* tool completes,
+        # and bridge the result to reviewer memory so the reviewer can
+        # audit independently without needing the executor's conversation.
         if session_slug and tool_name.startswith("vendor_"):
+            vendor_entry = {
+                "event": "vendor_tool_use",
+                "tool": tool_name,
+                "success": not input_data.get("toolError"),
+                "output_preview": result_text[:200],
+            }
             try:
                 workspace.append_agent_memory_entry(
                     session_slug,
                     "executor",
-                    {
-                        "event": "vendor_tool_use",
-                        "tool": tool_name,
-                        "success": not input_data.get("toolError"),
-                        "output_preview": result_text[:200],
-                    },
+                    vendor_entry,
                 )
             except Exception:
                 logger.debug("Failed to save executor memory", exc_info=True)
+            try:
+                workspace.append_agent_memory_entry(
+                    session_slug,
+                    "reviewer",
+                    vendor_entry,
+                )
+            except Exception:
+                logger.debug("Failed to save reviewer memory for vendor tool", exc_info=True)
 
         return None
 
@@ -343,64 +376,31 @@ def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | No
 
 
 def _build_rethink_hint(error_context: str, error_msg: str, attempt: int, max_attempts: int) -> str:
-    """Generate a structured rethink hint for the agent based on error patterns."""
+    """Generate a concise rethink hint for the agent based on error patterns."""
     error_lower = error_msg.lower()
 
     if "permission denied" in error_lower:
-        fix_suggestion = (
-            "The tool was denied file access. Before retrying:\n"
-            "1. Use `workspace_search` to find accessible file paths\n"
-            "2. Ensure output paths are within the workspace results/ directory\n"
-            "3. Check that input files exist in workspace data/"
-        )
+        fix_suggestion = "Check file paths are within workspace data/ and outputs go to results/."
     elif "no such file" in error_lower or "not found" in error_lower:
-        fix_suggestion = (
-            "A file or directory was not found. Before retrying:\n"
-            "1. Use `workspace_search` to verify correct file paths\n"
-            "2. Check for typos in file names\n"
-            "3. Ensure the data directory exists and contains expected files"
-        )
+        fix_suggestion = "Use workspace_search to verify correct file paths before retrying."
     elif "import" in error_lower or "module" in error_lower:
-        fix_suggestion = (
-            "A Python dependency is missing. Before retrying:\n"
-            "1. Read the SKILL.md to check required packages\n"
-            "2. Consider using the --demo flag if available\n"
-            "3. Try an alternative skill that doesn't require this dependency"
-        )
+        fix_suggestion = "Read SKILL.md for required packages; try --demo flag if available."
     elif "timeout" in error_lower:
-        fix_suggestion = (
-            "The operation timed out. Before retrying:\n"
-            "1. Try with a smaller input dataset\n"
-            "2. Check if the skill supports chunked processing\n"
-            "3. Consider increasing timeout or using a subset of data"
-        )
+        fix_suggestion = "Try with a smaller input dataset or check if chunked processing is supported."
     elif "invalid" in error_lower and ("param" in error_lower or "arg" in error_lower):
-        fix_suggestion = (
-            "Parameters were invalid. Before retrying:\n"
-            "1. Use `read_skill_doc` to read the correct parameter schema\n"
-            "2. Verify parameter types (string vs int vs path)\n"
-            "3. Check required vs optional parameters"
-        )
+        fix_suggestion = "Use read_skill_doc to verify parameter schema and types."
     else:
-        fix_suggestion = (
-            "An unexpected error occurred. Before retrying:\n"
-            "1. Use `read_skill_doc` to re-read the skill's documentation\n"
-            "2. Verify all input parameters and file paths\n"
-            "3. Try with different parameters or the --demo flag"
-        )
+        fix_suggestion = "Re-read skill docs via read_skill_doc and adjust parameters."
 
     return (
-        f"🔄 RETRY ATTEMPT {attempt}/{max_attempts} — RETHINK REQUIRED\n\n"
-        f"Error: {error_msg[:300]}\n\n"
-        f"Analysis & Fix Suggestions:\n{fix_suggestion}\n\n"
-        f"IMPORTANT: Do NOT retry with the exact same parameters. "
-        f"Analyse the error, adjust your approach, then try again."
+        f"🔄 RETRY {attempt}/{max_attempts}: {error_msg[:150]} — "
+        f"{fix_suggestion} Do NOT retry with identical parameters."
     )
 
 
 def _make_error_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     _retry_counts: dict[str, int] = {}
-    _MAX_RETRIES = 4  # Aligned with tool_adapter's _MAX_SKILL_RETRIES
+    _MAX_RETRIES = 2  # Aligned with Executor prompt retry count
 
     async def on_error_occurred(
         input_data: dict[str, Any], invocation: Any

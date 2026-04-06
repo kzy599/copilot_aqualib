@@ -129,19 +129,74 @@ class TestSystemPrompt:
 
 class TestAgentPrompts:
     def test_executor_prompt_reads_plan(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Executor prompt should instruct reading plan.md."""
+        """Executor prompt should reference plan.md but NOT instruct re-reading it."""
         from aqualib.sdk.agents import build_custom_agents
 
         agents = build_custom_agents(settings, workspace)
         executor = next(a for a in agents if a["name"] == "executor")
         assert "plan.md" in executor["prompt"]
-        assert "Read the Plan" in executor["prompt"]
+        # Executor trusts conversation history — it should NOT redundantly re-read plan.md
+        assert "do NOT re-read plan.md" in executor["prompt"]
 
     def test_reviewer_prompt_reads_plan(self, settings: Settings, workspace: WorkspaceManager) -> None:
-        """Reviewer prompt should instruct reading plan.md."""
+        """Reviewer prompt should instruct reading plan.md independently."""
         from aqualib.sdk.agents import build_custom_agents
 
         agents = build_custom_agents(settings, workspace)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
         assert "plan.md" in reviewer["prompt"]
-        assert "Read the Plan" in reviewer["prompt"]
+        assert "Read the Plan First" in reviewer["prompt"]
+
+    def test_reviewer_prompt_audits_plan_adherence(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt must include a plan adherence audit step and verdict field."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        # Explicit plan adherence responsibility in the prompt
+        assert "Plan Adherence Audit" in reviewer["prompt"]
+        # PLAN_ADHERENCE appears in the verdict format the reviewer must emit
+        assert "PLAN_ADHERENCE" in reviewer["prompt"]
+
+    def test_reviewer_prompt_audits_plan_reasonableness(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer prompt must evaluate the plan's soundness and can request revision."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        # Explicit plan reasonableness audit
+        assert "Plan Reasonableness Audit" in reviewer["prompt"]
+        # revision_needed is a valid PLAN_QUALITY value
+        assert "revision_needed" in reviewer["prompt"]
+        # plan_revision_needed is a valid VERDICT value
+        assert "plan_revision_needed" in reviewer["prompt"]
+
+    def test_reviewer_has_read_skill_doc_tool(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Reviewer needs read_skill_doc to independently verify skill capabilities."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        assert "read_skill_doc" in reviewer["tools"]
+
+    def test_executor_prompt_handles_plan_revision(self, settings: Settings, workspace: WorkspaceManager) -> None:
+        """Executor prompt must describe escalation when Reviewer requests plan revision."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        executor = next(a for a in agents if a["name"] == "executor")
+        assert "Plan Revision Escalation" in executor["prompt"]
+        assert "plan_revision_needed" in executor["prompt"]
+        # Executor should NOT retry execution on plan revision
+        assert "do NOT retry execution" in executor["prompt"]
+
+    def test_planner_guidelines_include_plan_revision_loop(
+        self, settings: Settings, workspace: WorkspaceManager,
+    ) -> None:
+        """Planner system prompt should describe the plan revision feedback loop."""
+        from aqualib.sdk.system_prompt import build_system_message
+
+        msg = build_system_message(settings, workspace)
+        guidelines = msg["sections"]["guidelines"]["content"]
+        assert "plan_revision_needed" in guidelines
+        assert "Revise the plan" in guidelines

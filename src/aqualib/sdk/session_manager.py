@@ -100,9 +100,14 @@ class SessionManager:
         from aqualib.sdk.agents import build_custom_agents
         from aqualib.sdk.hooks import build_hooks
         from aqualib.sdk.system_prompt import build_system_message
+        from aqualib.skills.scanner import scan_all_skill_dirs
         from aqualib.skills.tool_adapter import build_tools_from_skills
 
         s = self.settings.copilot
+
+        # Pre-scan skill metas once; pass to both build_tools_from_skills and
+        # build_hooks to avoid triple scanning (once per call site).
+        skill_metas = scan_all_skill_dirs(self.settings, self.workspace)
 
         session = await self.client.create_session(
             session_id=session_id,
@@ -112,9 +117,11 @@ class SessionManager:
             provider=self._build_provider(),
             skill_directories=self._collect_skill_dirs(),
             custom_agents=build_custom_agents(self.settings, self.workspace, slug),
-            tools=build_tools_from_skills(self.settings, self.workspace, session_slug=slug),
+            tools=build_tools_from_skills(
+                self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
+            ),
             system_message=build_system_message(self.settings, self.workspace),
-            hooks=build_hooks(self.settings, self.workspace, slug),
+            hooks=build_hooks(self.settings, self.workspace, slug, skill_metas=skill_metas),
             on_permission_request=self._build_permission_handler(),
             on_user_input_request=self._build_user_input_handler(),
             mcp_servers=self._build_mcp_servers(),
@@ -133,20 +140,27 @@ class SessionManager:
         from aqualib.sdk.agents import build_custom_agents
         from aqualib.sdk.hooks import build_hooks
         from aqualib.sdk.system_prompt import build_system_message
+        from aqualib.skills.scanner import scan_all_skill_dirs
         from aqualib.skills.tool_adapter import build_tools_from_skills
 
         s = self.settings.copilot
+
+        # Pre-scan skill metas once; pass to both build_tools_from_skills and
+        # build_hooks to avoid duplicate scanning on resume.
+        skill_metas = scan_all_skill_dirs(self.settings, self.workspace)
 
         return await self.client.resume_session(
             session_id,
             on_permission_request=self._build_permission_handler(),
             on_user_input_request=self._build_user_input_handler(),
             provider=self._build_provider(),
-            tools=build_tools_from_skills(self.settings, self.workspace, session_slug=slug),
+            tools=build_tools_from_skills(
+                self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
+            ),
             skill_directories=self._collect_skill_dirs(),
             custom_agents=build_custom_agents(self.settings, self.workspace, slug),
             system_message=build_system_message(self.settings, self.workspace),
-            hooks=build_hooks(self.settings, self.workspace, slug),
+            hooks=build_hooks(self.settings, self.workspace, slug, skill_metas=skill_metas),
             model=s.model,
             reasoning_effort=s.reasoning_effort,
             streaming=s.streaming,

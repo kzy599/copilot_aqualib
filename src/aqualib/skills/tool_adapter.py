@@ -108,15 +108,20 @@ def build_tools_from_skills(
     settings: "Settings",
     workspace: "WorkspaceManager",
     session_slug: str | None = None,
+    skill_metas: "list[SkillMeta] | None" = None,
 ) -> list:
     """Scan all SKILL.md files and convert each vendor skill to a Copilot SDK tool.
 
     Returns a list of tool callables decorated with ``@define_tool`` (or equivalent
     dict specs when the SDK is not installed, for testing purposes).
-    """
-    from aqualib.skills.scanner import scan_all_skill_dirs
 
-    skill_metas = scan_all_skill_dirs(settings, workspace)
+    If *skill_metas* is provided (pre-scanned), the ``scan_all_skill_dirs`` call is
+    skipped, eliminating duplicate file I/O when called from session_manager.
+    """
+    if skill_metas is None:
+        from aqualib.skills.scanner import scan_all_skill_dirs
+
+        skill_metas = scan_all_skill_dirs(settings, workspace)
     tools: list = []
 
     for meta in skill_metas:
@@ -395,13 +400,21 @@ async def _run_vendor_skill_with_retry(
     on_error_occurred hook can handle retries with rethink hints,
     prompting the model to re-read docs and construct a different command.
     This avoids the "N retries × N retries" multiplication problem.
+
+    All Python-level exceptions are caught and returned as "ERROR: ..." strings
+    so the LLM receives a descriptive message rather than the SDK's generic
+    "Invoking this tool produced an error. Detailed information is not available."
     """
-    result = await _run_vendor_skill(
-        meta, workspace,
-        command=command,
-        parameters=parameters,
-        session_slug=session_slug,
-    )
+    try:
+        result = await _run_vendor_skill(
+            meta, workspace,
+            command=command,
+            parameters=parameters,
+            session_slug=session_slug,
+        )
+    except Exception as exc:
+        result = f"ERROR: Vendor skill '{meta.name}' raised an unexpected exception: {exc}"
+        logger.exception("Unexpected exception in vendor skill '%s'", meta.name)
 
     if result.startswith("ERROR:"):
         logger.warning("Skill '%s' failed: %s", meta.name, result[:200])

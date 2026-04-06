@@ -194,6 +194,7 @@ class TestBuildCustomAgentsMemoryInjection:
         assert "Your previous work" not in executor["prompt"]
 
     def test_injects_executor_memory(self, workspace: WorkspaceManager, session_slug: str):
+        """Executor does NOT get memory injection; it shares conversation history with Planner."""
         from aqualib.config import Settings
         from aqualib.sdk.agents import build_custom_agents
 
@@ -210,8 +211,9 @@ class TestBuildCustomAgentsMemoryInjection:
         settings = Settings()
         agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
         executor = next(a for a in agents if a["name"] == "executor")
-        assert "Your previous work in this session" in executor["prompt"]
-        assert "align MVKLF and MVKLT" in executor["prompt"]
+        # Executor shares conversation history with Planner — no separate memory injection
+        assert "Your previous work in this session" not in executor["prompt"]
+        assert "align MVKLF and MVKLT" not in executor["prompt"]
 
     def test_injects_reviewer_memory(self, workspace: WorkspaceManager, session_slug: str):
         from aqualib.config import Settings
@@ -230,7 +232,7 @@ class TestBuildCustomAgentsMemoryInjection:
         settings = Settings()
         agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
         reviewer = next(a for a in agents if a["name"] == "reviewer")
-        assert "Your previous audits in this session" in reviewer["prompt"]
+        assert "Your previous verdicts in this session" in reviewer["prompt"]
         assert "audit alignment task" in reviewer["prompt"]
 
     def test_no_injection_when_empty_memory(self, workspace: WorkspaceManager, session_slug: str):
@@ -248,25 +250,31 @@ class TestBuildCustomAgentsMemoryInjection:
         from aqualib.config import Settings
         from aqualib.sdk.agents import build_custom_agents
 
-        # Add 8 entries
+        # Add 8 vendor_tool_use entries to executor memory
         for i in range(8):
             workspace.append_agent_memory_entry(
-                session_slug, "executor", {"query": f"task-{i}", "skills_used": []}
+                session_slug,
+                "executor",
+                {
+                    "event": "vendor_tool_use",
+                    "tool": f"vendor_task_{i}",
+                    "success": True,
+                    "output_preview": f"result-{i}",
+                },
             )
 
         settings = Settings()
         agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
-        executor = next(a for a in agents if a["name"] == "executor")
-        prompt = executor["prompt"]
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        prompt = reviewer["prompt"]
 
         # Should contain last 5 (task-3 through task-7), not older ones
-        assert "task-7" in prompt
-        assert "task-3" in prompt
+        assert "vendor_task_7" in prompt
+        assert "vendor_task_3" in prompt
         # task-0, task-1, task-2 should NOT be in the injected context
-        # (they're beyond the last 5)
-        assert "task-0" not in prompt
-        assert "task-1" not in prompt
-        assert "task-2" not in prompt
+        assert "vendor_task_0" not in prompt
+        assert "vendor_task_1" not in prompt
+        assert "vendor_task_2" not in prompt
 
 
 # ---------------------------------------------------------------------------
