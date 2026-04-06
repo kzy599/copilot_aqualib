@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aqualib.config import DirectorySettings, Settings
+from aqualib.config import DirectorySettings, MCPServerConfig, MCPSettings, Settings
 from aqualib.workspace.manager import WorkspaceManager
 
 
@@ -478,3 +478,190 @@ class TestSessionManager:
         result = await handler(request)
         assert result["answer"] == "yes"
         assert result["wasFreeform"] is True
+
+
+# ---------------------------------------------------------------------------
+# MCP support
+# ---------------------------------------------------------------------------
+
+_MCP_PATCH_AGENTS = "aqualib.sdk.agents.build_custom_agents"
+_MCP_PATCH_HOOKS = "aqualib.sdk.hooks.build_hooks"
+_MCP_PATCH_SYSTEM = "aqualib.sdk.system_prompt.build_system_message"
+_MCP_PATCH_TOOLS = "aqualib.skills.tool_adapter.build_tools_from_skills"
+
+
+class TestMCPSupport:
+    """Tests for MCP server configuration wiring."""
+
+    def _make_workspace(self, tmp_path: Path) -> WorkspaceManager:
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        settings = Settings(directories=dirs)
+        return WorkspaceManager(settings)
+
+    def _make_sm(self, tmp_path: Path, mcp: MCPSettings):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="mcp-test")
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            mcp=mcp,
+        )
+        from aqualib.sdk.session_manager import SessionManager
+
+        return SessionManager(None, settings, workspace)
+
+    def test_build_mcp_servers_returns_none_when_disabled(self, tmp_path: Path):
+        sm = self._make_sm(
+            tmp_path,
+            MCPSettings(
+                enabled=False,
+                servers=[MCPServerConfig(name="s", command="npx")],
+            ),
+        )
+        assert sm._build_mcp_servers() is None
+
+    def test_build_mcp_servers_returns_none_when_no_servers(self, tmp_path: Path):
+        sm = self._make_sm(tmp_path, MCPSettings(enabled=True, servers=[]))
+        assert sm._build_mcp_servers() is None
+
+    def test_build_mcp_servers_stdio(self, tmp_path: Path):
+        sm = self._make_sm(
+            tmp_path,
+            MCPSettings(
+                enabled=True,
+                servers=[
+                    MCPServerConfig(
+                        name="genome-db",
+                        transport="stdio",
+                        command="npx",
+                        args=["-y", "@anthropic/genome-db"],
+                        env={"TOKEN": "abc"},
+                    )
+                ],
+            ),
+        )
+        result = sm._build_mcp_servers()
+        assert result is not None
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["name"] == "genome-db"
+        assert entry["transport"] == "stdio"
+        assert entry["command"] == "npx"
+        assert entry["args"] == ["-y", "@anthropic/genome-db"]
+        assert entry["env"] == {"TOKEN": "abc"}
+
+    def test_build_mcp_servers_sse(self, tmp_path: Path):
+        sm = self._make_sm(
+            tmp_path,
+            MCPSettings(
+                enabled=True,
+                servers=[
+                    MCPServerConfig(
+                        name="remote",
+                        transport="sse",
+                        url="http://example.com:3100/sse",
+                    )
+                ],
+            ),
+        )
+        result = sm._build_mcp_servers()
+        assert result is not None
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["name"] == "remote"
+        assert entry["transport"] == "sse"
+        assert entry["url"] == "http://example.com:3100/sse"
+        assert "command" not in entry
+
+    def test_build_mcp_servers_multiple(self, tmp_path: Path):
+        sm = self._make_sm(
+            tmp_path,
+            MCPSettings(
+                enabled=True,
+                servers=[
+                    MCPServerConfig(name="s1", transport="stdio", command="python", args=["-m", "mcp"]),
+                    MCPServerConfig(name="s2", transport="sse", url="http://localhost:9000/sse"),
+                ],
+            ),
+        )
+        result = sm._build_mcp_servers()
+        assert result is not None
+        assert len(result) == 2
+        names = {e["name"] for e in result}
+        assert names == {"s1", "s2"}
+
+    def test_build_mcp_servers_skips_misconfigured(self, tmp_path: Path):
+        sm = self._make_sm(
+            tmp_path,
+            MCPSettings(
+                enabled=True,
+                servers=[
+                    MCPServerConfig(name="bad-stdio", transport="stdio", command=""),
+                    MCPServerConfig(name="bad-sse", transport="sse", url=""),
+                    MCPServerConfig(name="good", transport="stdio", command="npx"),
+                ],
+            ),
+        )
+        result = sm._build_mcp_servers()
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["name"] == "good"
+
+    @pytest.mark.asyncio
+    async def test_create_session_passes_mcp_servers(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="mcp-test")
+
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            mcp=MCPSettings(
+                enabled=True,
+                servers=[MCPServerConfig(name="srv", transport="stdio", command="npx")],
+            ),
+        )
+
+        with patch(_MCP_PATCH_AGENTS, return_value=[]), \
+             patch(_MCP_PATCH_HOOKS, return_value={}), \
+             patch(_MCP_PATCH_SYSTEM, return_value={}), \
+             patch(_MCP_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            await sm.get_or_create_session()
+
+        mock_client.create_session.assert_called_once()
+        kwargs = mock_client.create_session.call_args[1]
+        assert "mcp_servers" in kwargs
+        assert kwargs["mcp_servers"] is not None
+        assert len(kwargs["mcp_servers"]) == 1
+        assert kwargs["mcp_servers"][0]["name"] == "srv"
+
+    @pytest.mark.asyncio
+    async def test_create_session_no_mcp_when_disabled(self, tmp_path: Path):
+        workspace = self._make_workspace(tmp_path)
+        workspace.create_project(name="mcp-test")
+
+        mock_client = AsyncMock()
+        mock_session = MagicMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            mcp=MCPSettings(enabled=False),
+        )
+
+        with patch(_MCP_PATCH_AGENTS, return_value=[]), \
+             patch(_MCP_PATCH_HOOKS, return_value={}), \
+             patch(_MCP_PATCH_SYSTEM, return_value={}), \
+             patch(_MCP_PATCH_TOOLS, return_value=[]):
+            from aqualib.sdk.session_manager import SessionManager
+
+            sm = SessionManager(mock_client, settings, workspace)
+            await sm.get_or_create_session()
+
+        mock_client.create_session.assert_called_once()
+        kwargs = mock_client.create_session.call_args[1]
+        assert kwargs["mcp_servers"] is None

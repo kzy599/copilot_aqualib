@@ -117,6 +117,7 @@ class SessionManager:
             hooks=build_hooks(self.settings, self.workspace, slug),
             on_permission_request=self._build_permission_handler(),
             on_user_input_request=self._build_user_input_handler(),
+            mcp_servers=self._build_mcp_servers(),
             infinite_sessions={
                 "enabled": True,
                 "background_compaction_threshold": 0.80,
@@ -149,6 +150,7 @@ class SessionManager:
             model=s.model,
             reasoning_effort=s.reasoning_effort,
             streaming=s.streaming,
+            mcp_servers=self._build_mcp_servers(),
             infinite_sessions={
                 "enabled": True,
                 "background_compaction_threshold": 0.80,
@@ -195,6 +197,38 @@ class SessionManager:
         if p.azure:
             config["azure"] = {"api_version": p.azure.api_version}
         return config
+
+    def _build_mcp_servers(self) -> list[dict] | None:
+        """Build the mcp_servers list from settings, or None if MCP is disabled."""
+        mcp = self.settings.mcp
+        if not mcp.enabled or not mcp.servers:
+            return None
+        result = []
+        for srv in mcp.servers:
+            if srv.transport == "stdio" and srv.command:
+                entry: dict[str, Any] = {
+                    "name": srv.name,
+                    "transport": "stdio",
+                    "command": srv.command,
+                    "args": srv.args,
+                }
+                if srv.env:
+                    entry["env"] = srv.env
+                result.append(entry)
+            elif srv.transport == "sse" and srv.url:
+                result.append({
+                    "name": srv.name,
+                    "transport": "sse",
+                    "url": srv.url,
+                })
+            else:
+                logger.warning(
+                    "Skipping MCP server '%s': transport='%s' requires %s",
+                    srv.name,
+                    srv.transport,
+                    "'command'" if srv.transport == "stdio" else "'url'",
+                )
+        return result or None
 
     def _build_permission_handler(self):
         """Return a permission request handler with workspace-scoped safety rules.

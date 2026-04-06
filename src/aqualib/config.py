@@ -159,6 +159,26 @@ class TelemetrySettings(BaseModel):
     )
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP Server."""
+
+    name: str = Field(description="Unique server identifier")
+    transport: Literal["stdio", "sse"] = Field(default="stdio")
+    # stdio mode fields
+    command: str = Field(default="", description="Command to launch the MCP server process")
+    args: list[str] = Field(default_factory=list, description="Arguments for the command")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables for the subprocess")
+    # sse mode fields
+    url: str = Field(default="", description="Remote SSE endpoint URL")
+
+
+class MCPSettings(BaseModel):
+    """MCP global toggle + server list."""
+
+    enabled: bool = Field(default=False, description="Set to true to enable MCP server connections.")
+    servers: list[MCPServerConfig] = Field(default_factory=list, description="List of MCP servers to connect.")
+
+
 class Settings(BaseModel):
     """Root settings object – the single source of truth."""
 
@@ -167,6 +187,7 @@ class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
     vendor_priority: bool = Field(
         default=True,
         description="When True the framework *always* prefers vendor skills over generic tools.",

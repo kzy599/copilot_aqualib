@@ -736,6 +736,18 @@ def init(
                 f"  model: {settings.llm.model}\n"
                 f"  temperature: {settings.llm.temperature}\n"
                 f"  max_tokens: {settings.llm.max_tokens}\n"
+                f"\n"
+                f"mcp:\n"
+                f"  enabled: false\n"
+                f"  servers: []\n"
+                f"  # Example:\n"
+                f"  # - name: \"my-server\"\n"
+                f"  #   transport: stdio\n"
+                f"  #   command: \"npx\"\n"
+                f"  #   args: [\"-y\", \"@anthropic/my-mcp-server\"]\n"
+                f"  # - name: \"remote-server\"\n"
+                f"  #   transport: sse\n"
+                f"  #   url: \"http://example.com:3100/sse\"\n"
             )
         cfg_path.write_text(cfg_template)
         rprint(f"[green]✅ Config written → {cfg_path}[/green]")
