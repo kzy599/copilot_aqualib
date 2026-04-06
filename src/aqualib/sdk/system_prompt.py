@@ -45,8 +45,23 @@ entirely and answer directly.
      (e) After confirmation, re-delegate to the executor with the new plan
 
 3. **Workspace Discipline**:
-   - All outputs go to the workspace results directory
+   - All task outputs go to the session results directory: \
+`sessions/<slug>/results/`
+   - Standard output structure: `report.md`, `result.json`, `tables/`, \
+`reproducibility/`
+   - NEVER create arbitrary output directories (e.g. `ebv_output/`, `output/`) \
+in the workspace root — always use the session results path provided by the Executor
    - Never modify files in data/ (treat as read-only source data)
+   - NEVER fabricate or simulate results — if a skill fails, report the failure \
+honestly
+
+4. **Vendor Skill Libraries**:
+   - Vendor libraries are independently maintained projects; their CLI, parameters, \
+and output formats may change between versions
+   - ALWAYS call `read_library_doc` then `read_skill_doc` to learn the current \
+usage — do NOT assume a fixed command format or hardcoded examples
+   - Vendor skills are preferred over hand-written code: they are tested, \
+reproducible, and produce standardised outputs
 """
 
 

@@ -55,12 +55,12 @@ async def test_build_hooks_doc_first_gate_unlocked_by_post_hook(workspace, setti
     pre_hook = hooks["on_pre_tool_use"]
     post_hook = hooks["on_post_tool_use"]
 
-    # Gate warns (but still allows) before docs are read
+    # Gate blocks before docs are read
     result = await pre_hook({"toolName": "vendor_seq_align", "toolArgs": {}}, None)
-    assert result["permissionDecision"] == "allow"
+    assert result["permissionDecision"] == "block"
     assert "DOC-FIRST" in result.get("additionalContext", "")
 
-    # After reading docs, gate allows without warning
+    # After reading docs, gate allows without blocking
     await post_hook({"toolName": "read_library_doc", "toolResult": "..."}, None)
 
     result = await pre_hook({"toolName": "vendor_seq_align", "toolArgs": {}}, None)
@@ -209,7 +209,7 @@ class TestPreToolHook:
 
     @pytest.mark.asyncio
     async def test_doc_first_gate_warns_vendor_without_docs(self, workspace, settings):
-        """Vendor tool invocation before reading any docs should warn but still allow."""
+        """Vendor tool invocation before reading any docs should block until docs are read."""
         from aqualib.sdk.hooks import _make_pre_tool_hook
 
         hook = _make_pre_tool_hook(settings, workspace)
@@ -221,7 +221,7 @@ class TestPreToolHook:
             },
             None,
         )
-        assert result["permissionDecision"] == "allow"
+        assert result["permissionDecision"] == "block"
         assert "DOC-FIRST" in result.get("additionalContext", "")
 
     @pytest.mark.asyncio

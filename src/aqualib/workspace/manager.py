@@ -423,13 +423,50 @@ class WorkspaceManager:
         meta["summary"] = self.build_project_summary()
         self.save_project(meta)
 
-    def finalize_task(self) -> None:
+    def finalize_task(self, session_slug: str | None = None) -> None:
         """Post-task cleanup called from the ``on_session_end`` hook.
 
-        Currently a no-op placeholder — future implementations may flush
-        buffers, compact logs, or snapshot state.
+        When *session_slug* is provided, scans the workspace base directory for
+        stray output files that the model wrote outside the canonical session
+        results directory and copies them into ``sessions/<slug>/results/``.
+
+        Stray files are any ``.md``, ``.json``, or ``.csv`` files and directories
+        in the workspace base that are not under ``sessions/``, ``results/``,
+        ``data/``, ``work/``, or ``skills/``, and that are not framework files
+        (``project.json``, ``context_log.jsonl``, ``aqualib.yaml``).
         """
         logger.info("Task finalised – workspace state is up-to-date.")
+
+        if not session_slug:
+            return
+
+        import shutil
+
+        _FRAMEWORK_FILES = frozenset({"project.json", "context_log.jsonl", "aqualib.yaml"})
+        _SKIP_DIRS = frozenset({"sessions", "results", "data", "work", "skills"})
+        _STRAY_EXTENSIONS = {".md", ".json", ".csv"}
+
+        base = self.dirs.base
+        dest_dir = self.session_results_dir(session_slug)
+
+        for item in sorted(base.iterdir()):
+            if item.name in _SKIP_DIRS:
+                continue
+            if item.name in _FRAMEWORK_FILES:
+                continue
+            if item.name.startswith("."):
+                continue
+
+            if item.is_file() and item.suffix in _STRAY_EXTENSIONS:
+                dest = dest_dir / item.name
+                if not dest.exists():
+                    shutil.copy2(item, dest)
+                    logger.info("finalize_task: copied stray file %s → %s", item.name, dest)
+            elif item.is_dir():
+                dest = dest_dir / item.name
+                if not dest.exists():
+                    shutil.copytree(item, dest)
+                    logger.info("finalize_task: copied stray dir %s → %s", item.name, dest)
 
     # ------------------------------------------------------------------
     # Data-file scanning (fallback when RAG is unavailable)

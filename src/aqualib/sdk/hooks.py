@@ -258,6 +258,8 @@ def _make_pre_tool_hook(
         doc_tools_called = set()
 
     _vendor_reminder_sent = [False]  # mutable flag: fires once per session
+    _tool_call_count = [0]  # mutable counter for hard tool call limit
+    _HARD_TOOL_LIMIT = 25
 
     # Utility tools that should never trigger the vendor priority reminder
     _UTILITY_TOOLS = frozenset({"workspace_search", "read_skill_doc", "read_library_doc", "write_plan"})
@@ -265,17 +267,21 @@ def _make_pre_tool_hook(
     async def on_pre_tool_use(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, Any]:
-        """Doc-first gate + vendor priority check + pre-execution audit record.
+        """Doc-first gate + tool call limit + vendor priority check + audit record.
 
         If a vendor_* tool is invoked before any documentation has been read
-        in this session, allow the call but warn the model to read docs first.
-        (Using 'allow' instead of 'block' avoids wasting a full LLM turn; the
-        model gets an informative warning message alongside the tool result.)
+        in this session, block the call and guide the model to read docs first.
+
+        If the hard tool call limit is reached, block all further calls and
+        instruct the model to wrap up immediately.
 
         If vendor skills are available but the agent chose a non-utility built-in
         tool, return an ``additionalContext`` reminder once per session.
         """
         tool_name = input_data.get("toolName", "")
+
+        # Increment tool call counter (before any early returns so every call is counted)
+        _tool_call_count[0] += 1
 
         entry: dict[str, Any] = {
             "event": "pre_tool_use",
@@ -286,17 +292,29 @@ def _make_pre_tool_hook(
             entry["session_slug"] = session_slug
         workspace.append_audit_entry(entry)
 
-        # Doc-first gate: warn (but allow) vendor tool calls until docs have been read.
+        # Hard tool call limit: block and demand wrap-up when exceeded
+        if _tool_call_count[0] > _HARD_TOOL_LIMIT:
+            return {
+                "permissionDecision": "block",
+                "additionalContext": (
+                    f"🛑 HARD TOOL LIMIT REACHED ({_tool_call_count[0]}/{_HARD_TOOL_LIMIT}): "
+                    "No further tool calls are allowed. "
+                    "Immediately produce the EXECUTION_REPORT with what you have completed "
+                    "and say 'Delegating to reviewer for audit.'"
+                ),
+            }
+
+        # Doc-first gate: block vendor tool calls until docs have been read.
         # `not doc_tools_called` is True when the set is empty (no docs read yet).
         if tool_name.startswith("vendor_") and not doc_tools_called:
             return {
-                "permissionDecision": "allow",
+                "permissionDecision": "block",
                 "additionalContext": (
-                    "⚠️ DOC-FIRST WARNING: You are invoking a vendor tool before reading "
-                    "documentation. Call read_library_doc first to understand the library's "
-                    "CLI format, then read_skill_doc for the specific skill parameters. "
+                    "🚫 DOC-FIRST GATE: You must read documentation before invoking a vendor tool. "
+                    "Call read_library_doc first to understand the library's CLI architecture, "
+                    "then read_skill_doc for the specific skill's parameters. "
                     "Then retry the vendor tool call with the 'command' field set to the full "
-                    "shell command string."
+                    "shell command you learned from the docs."
                 ),
             }
 
@@ -383,7 +401,7 @@ def _make_post_tool_hook(
 def _make_session_end_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_session_end(input_data: dict[str, Any], invocation: Any) -> None:
         """Flush and finalise the workspace state after the session ends."""
-        workspace.finalize_task()
+        workspace.finalize_task(session_slug=session_slug)
         if session_slug:
             workspace.finalize_session_results(session_slug)
         return None
