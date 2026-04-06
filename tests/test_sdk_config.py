@@ -178,3 +178,40 @@ def test_openai_api_key_still_applies_to_llm(monkeypatch):
     s = get_settings()
     assert s.llm.api_key == "legacy-openai-key"
     reset_settings()
+
+
+# ---------------------------------------------------------------------------
+# TelemetrySettings
+# ---------------------------------------------------------------------------
+
+
+def test_telemetry_settings_defaults():
+    from aqualib.config import TelemetrySettings
+
+    t = TelemetrySettings()
+    assert t.enabled is False
+    assert t.otlp_endpoint == ""
+    assert t.capture_content is False
+
+
+def test_settings_has_telemetry_field():
+    s = Settings()
+    assert hasattr(s, "telemetry")
+    from aqualib.config import TelemetrySettings
+
+    assert isinstance(s.telemetry, TelemetrySettings)
+
+
+def test_telemetry_roundtrip():
+    from aqualib.config import TelemetrySettings
+
+    s = Settings(
+        telemetry=TelemetrySettings(
+            enabled=True,
+            otlp_endpoint="http://localhost:4317",
+            capture_content=True,
+        )
+    )
+    assert s.telemetry.enabled is True
+    assert s.telemetry.otlp_endpoint == "http://localhost:4317"
+    assert s.telemetry.capture_content is True

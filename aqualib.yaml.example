@@ -85,3 +85,17 @@ llm:
   model: "gpt-4o"
   temperature: 0.2
   max_tokens: 4096
+
+# ---------------------------------------------------------------------------
+# Telemetry (optional — OpenTelemetry distributed tracing)
+# ---------------------------------------------------------------------------
+telemetry:
+  # Set to true to enable OpenTelemetry tracing for long-running pipelines.
+  enabled: false
+
+  # OTLP collector endpoint (e.g. http://localhost:4317 for a local collector).
+  otlp_endpoint: ""
+
+  # When true, LLM prompt/response content is captured in trace spans.
+  # Keep false in production to avoid leaking sensitive data.
+  capture_content: false

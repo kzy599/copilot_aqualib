@@ -87,11 +87,12 @@ def build_system_message(settings: "Settings", workspace: "WorkspaceManager") ->
     project_context = _build_additional_context(workspace)
 
     return {
-        "mode": "override",
-        "content": (
-            identity_section + "\n\n" + guidelines_section
-            + ("\n\n" + project_context if project_context else "")
-        ),
+        "mode": "customize",
+        "sections": {
+            "identity": {"action": "replace", "content": identity_section},
+            "guidelines": {"action": "append", "content": guidelines_section},
+        },
+        "content": project_context if project_context else "",
     }
 
 

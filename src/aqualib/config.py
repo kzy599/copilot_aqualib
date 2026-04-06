@@ -142,6 +142,23 @@ class CopilotSettings(BaseModel):
     use_stdio: bool = Field(default=True, description="Use stdio transport (vs TCP)")
 
 
+class TelemetrySettings(BaseModel):
+    """OpenTelemetry distributed tracing configuration."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Set to true to enable OpenTelemetry tracing.",
+    )
+    otlp_endpoint: str = Field(
+        default="",
+        description="OTLP collector endpoint (e.g. http://localhost:4317).",
+    )
+    capture_content: bool = Field(
+        default=False,
+        description="When true, LLM prompt/response content is included in trace spans.",
+    )
+
+
 class Settings(BaseModel):
     """Root settings object – the single source of truth."""
 
@@ -149,6 +166,7 @@ class Settings(BaseModel):
     directories: DirectorySettings = Field(default_factory=DirectorySettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     vendor_priority: bool = Field(
         default=True,
         description="When True the framework *always* prefers vendor skills over generic tools.",
