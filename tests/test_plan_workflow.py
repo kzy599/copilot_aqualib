@@ -405,3 +405,89 @@ class TestPlannerDelegation:
         guidelines = msg["sections"]["guidelines"]["content"]
 
         assert "confirmation" in guidelines.lower() or "confirm" in guidelines.lower()
+
+
+# ---------------------------------------------------------------------------
+# all_tool_names auto-propagation
+# ---------------------------------------------------------------------------
+
+
+class TestAllToolNamesAutoPropagate:
+    def test_executor_gets_all_tool_names(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Executor tool list should be exactly all_tool_names when provided."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        all_tool_names = ["workspace_search", "read_skill_doc", "rag_search", "vendor_seq_align"]
+        agents = build_custom_agents(settings, workspace, all_tool_names=all_tool_names)
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert executor["tools"] == all_tool_names
+
+    def test_reviewer_excludes_vendor_tools(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer tool list should exclude vendor_* tools from all_tool_names."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        all_tool_names = [
+            "workspace_search", "read_skill_doc", "rag_search",
+            "vendor_seq_align", "vendor_drug_check",
+        ]
+        agents = build_custom_agents(settings, workspace, all_tool_names=all_tool_names)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "workspace_search" in reviewer["tools"]
+        assert "read_skill_doc" in reviewer["tools"]
+        assert "rag_search" in reviewer["tools"]
+        assert "vendor_seq_align" not in reviewer["tools"]
+        assert "vendor_drug_check" not in reviewer["tools"]
+
+    def test_rag_search_propagated_to_reviewer(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """rag_search (non-vendor) should be visible to reviewer when provided."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        all_tool_names = ["workspace_search", "rag_search", "vendor_align"]
+        agents = build_custom_agents(settings, workspace, all_tool_names=all_tool_names)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "rag_search" in reviewer["tools"]
+
+    def test_none_all_tool_names_falls_back_to_manual_list(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """When all_tool_names is None, executor falls back to manual list construction."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace, skill_metas=[], all_tool_names=None)
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert "workspace_search" in executor["tools"]
+        assert "read_library_doc" in executor["tools"]
+        assert "read_skill_doc" in executor["tools"]
+        assert "write_plan" in executor["tools"]
+
+    def test_executor_prompt_includes_plan_deviations(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Executor prompt must reference PLAN_DEVIATIONS field in EXECUTION_REPORT."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert "PLAN_DEVIATIONS" in executor["prompt"]
+
+    def test_reviewer_prompt_includes_adapted_justified(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer prompt must include adapted_justified as a PLAN_ADHERENCE value."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "adapted_justified" in reviewer["prompt"]

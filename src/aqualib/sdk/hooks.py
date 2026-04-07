@@ -127,6 +127,7 @@ def _save_execution_report_memory(
         r"ERRORS_ENCOUNTERED\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE
     )
     sanity_match = re.search(r"SANITY_CHECKS\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE)
+    deviations_match = re.search(r"PLAN_DEVIATIONS\s*:\s*(.+?)(?:\n|$)", result_text, re.IGNORECASE | re.DOTALL)
 
     entry: dict[str, Any] = {
         "event": "execution_report",
@@ -135,6 +136,7 @@ def _save_execution_report_memory(
         "total_vendor_calls": vendor_calls_match.group(1).strip() if vendor_calls_match else "unknown",
         "errors_encountered": errors_match.group(1).strip() if errors_match else "unknown",
         "sanity_checks": sanity_match.group(1).strip() if sanity_match else "unknown",
+        "plan_deviations": deviations_match.group(1).strip() if deviations_match else "none",
     }
 
     workspace.append_agent_memory_entry(session_slug, "executor", entry)

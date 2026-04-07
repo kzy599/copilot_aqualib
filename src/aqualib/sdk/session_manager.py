@@ -95,6 +95,16 @@ class SessionManager:
     # Private helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _extract_tool_names(tools: list) -> list[str]:
+        """Extract custom tool names from a list of SDK tool objects or stub dicts."""
+        names: list[str] = []
+        for t in tools:
+            name = t.get("name") if isinstance(t, dict) else getattr(t, "name", getattr(t, "__name__", ""))
+            if name:
+                names.append(name)
+        return names
+
     async def _create_sdk_session(self, slug: str, session_id: str) -> Any:
         """Create a new Copilot SDK session with all hooks and tools wired up."""
         from aqualib.sdk.agents import build_custom_agents
@@ -109,6 +119,13 @@ class SessionManager:
         # build_hooks to avoid triple scanning (once per call site).
         skill_metas = scan_all_skill_dirs(self.settings, self.workspace)
 
+        tools = build_tools_from_skills(
+            self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
+        )
+
+        # Extract all custom tool names so agents auto-propagate without manual maintenance.
+        all_tool_names = self._extract_tool_names(tools)
+
         session = await self.client.create_session(
             session_id=session_id,
             model=s.model,
@@ -116,10 +133,11 @@ class SessionManager:
             streaming=s.streaming,
             provider=self._build_provider(),
             skill_directories=self._collect_skill_dirs(),
-            custom_agents=build_custom_agents(self.settings, self.workspace, slug, skill_metas=skill_metas),
-            tools=build_tools_from_skills(
-                self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
+            custom_agents=build_custom_agents(
+                self.settings, self.workspace, slug,
+                skill_metas=skill_metas, all_tool_names=all_tool_names,
             ),
+            tools=tools,
             system_message=build_system_message(self.settings, self.workspace),
             hooks=build_hooks(self.settings, self.workspace, slug, skill_metas=skill_metas),
             on_permission_request=self._build_permission_handler(),
@@ -149,16 +167,24 @@ class SessionManager:
         # build_hooks to avoid duplicate scanning on resume.
         skill_metas = scan_all_skill_dirs(self.settings, self.workspace)
 
+        tools = build_tools_from_skills(
+            self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
+        )
+
+        # Extract all custom tool names so agents auto-propagate without manual maintenance.
+        all_tool_names = self._extract_tool_names(tools)
+
         return await self.client.resume_session(
             session_id,
             on_permission_request=self._build_permission_handler(),
             on_user_input_request=self._build_user_input_handler(),
             provider=self._build_provider(),
-            tools=build_tools_from_skills(
-                self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
-            ),
+            tools=tools,
             skill_directories=self._collect_skill_dirs(),
-            custom_agents=build_custom_agents(self.settings, self.workspace, slug, skill_metas=skill_metas),
+            custom_agents=build_custom_agents(
+                self.settings, self.workspace, slug,
+                skill_metas=skill_metas, all_tool_names=all_tool_names,
+            ),
             system_message=build_system_message(self.settings, self.workspace),
             hooks=build_hooks(self.settings, self.workspace, slug, skill_metas=skill_metas),
             model=s.model,
