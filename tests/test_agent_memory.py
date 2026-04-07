@@ -358,6 +358,35 @@ class TestBuildCustomAgentsMemoryInjection:
         assert "PRE_FLIGHT: passed" in prompt
         assert "failed - old run" not in prompt
 
+    def test_injects_plan_deviations_into_reviewer(
+        self, workspace: WorkspaceManager, session_slug: str
+    ):
+        """Reviewer prompt includes PLAN_DEVIATIONS from the executor's latest report."""
+        from aqualib.config import Settings
+        from aqualib.sdk.agents import build_custom_agents
+
+        workspace.append_agent_memory_entry(
+            session_slug,
+            "executor",
+            {
+                "event": "execution_report",
+                "pre_flight": "passed",
+                "steps_completed": "2/3",
+                "total_vendor_calls": "1",
+                "errors_encountered": "0",
+                "sanity_checks": "all_passed",
+                "plan_deviations": "Skipped step 3 - output already existed",
+            },
+        )
+
+        settings = Settings()
+        agents = build_custom_agents(settings, workspace=workspace, session_slug=session_slug)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+        prompt = reviewer["prompt"]
+
+        assert "PLAN_DEVIATIONS" in prompt
+        assert "Skipped step 3" in prompt
+
 
 # ---------------------------------------------------------------------------
 # on_session_end hook — resource cleanup only (executor memory moved to CLI)

@@ -614,6 +614,51 @@ class TestSaveExecutionReportMemory:
         assert entry["total_vendor_calls"] == "unknown"
         assert entry["errors_encountered"] == "unknown"
         assert entry["sanity_checks"] == "unknown"
+        # plan_deviations defaults to "none" (not "unknown") when missing
+        assert entry["plan_deviations"] == "none"
+
+    def test_parses_plan_deviations_field(self, tmp_path):
+        """PLAN_DEVIATIONS field is parsed and stored in executor memory entry."""
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="sdev")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: passed\n"
+            "  STEPS_COMPLETED: 2/3\n"
+            "  TOTAL_VENDOR_CALLS: 1\n"
+            "  ERRORS_ENCOUNTERED: 0\n"
+            "  PLAN_DEVIATIONS: Skipped step 3 — output file already existed from prior run\n"
+        )
+        _save_execution_report_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "executor")
+        entry = mem["entries"][0]
+        assert "Skipped step 3" in entry["plan_deviations"]
+
+    def test_plan_deviations_none_when_absent(self, tmp_path):
+        """PLAN_DEVIATIONS defaults to 'none' when not present in report."""
+        from aqualib.sdk.hooks import _save_execution_report_memory
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="snodev")
+        slug = meta["slug"]
+
+        result_text = (
+            "EXECUTION_REPORT:\n"
+            "  PRE_FLIGHT: passed\n"
+            "  STEPS_COMPLETED: 3/3\n"
+            "  TOTAL_VENDOR_CALLS: 2\n"
+            "  ERRORS_ENCOUNTERED: 0\n"
+        )
+        _save_execution_report_memory(ws, slug, result_text)
+
+        mem = ws.load_agent_memory(slug, "executor")
+        entry = mem["entries"][0]
+        assert entry["plan_deviations"] == "none"
 
     @pytest.mark.asyncio
     async def test_post_tool_hook_detects_execution_report(self, tmp_path):
