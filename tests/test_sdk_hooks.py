@@ -684,3 +684,236 @@ class TestSaveExecutionReportMemory:
         rev_vendor = [e for e in rev_mem.get("entries", []) if e.get("event") == "vendor_tool_use"]
         assert len(rev_vendor) == 0
 
+
+# ---------------------------------------------------------------------------
+# Plan pending gate (Gate 1)
+# ---------------------------------------------------------------------------
+
+
+class TestPlanPendingGate:
+    def _make_workspace(self, tmp_path):
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        ws = WorkspaceManager(Settings(directories=dirs))
+        ws.create_project(name="gate_test")
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_vendor_tool_blocked_when_plan_pending(self, tmp_path):
+        """Gate 1: vendor_* tools are blocked while .plan_pending exists."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="gate-sess")
+        slug = meta["slug"]
+
+        # Simulate write_plan creating the flag
+        pending_path = ws.session_dir(slug) / ".plan_pending"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("")
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+        hook = _make_pre_tool_hook(settings, ws, session_slug=slug)
+
+        result = await hook({"toolName": "vendor_seq_align", "toolArgs": {}}, None)
+
+        assert result["permissionDecision"] == "block"
+        assert "confirmation" in result.get("additionalContext", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_vendor_tool_allowed_after_confirmation(self, tmp_path):
+        """Gate 1: vendor_* tools are allowed once .plan_pending is cleared."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="confirmed-sess")
+        slug = meta["slug"]
+
+        # No .plan_pending file — plan already confirmed
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+        hook = _make_pre_tool_hook(settings, ws, session_slug=slug)
+
+        result = await hook({"toolName": "vendor_seq_align", "toolArgs": {}}, None)
+
+        assert result["permissionDecision"] == "allow"
+
+    @pytest.mark.asyncio
+    async def test_non_vendor_tool_allowed_while_plan_pending(self, tmp_path):
+        """Gate 1 only blocks vendor_* tools, not built-in tools."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="nonvendor-sess")
+        slug = meta["slug"]
+
+        pending_path = ws.session_dir(slug) / ".plan_pending"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("")
+
+        settings = Settings(directories=DirectorySettings(base=tmp_path).resolve())
+        hook = _make_pre_tool_hook(settings, ws, session_slug=slug)
+
+        result = await hook({"toolName": "workspace_search", "toolArgs": {}}, None)
+
+        assert result["permissionDecision"] == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Plan confirmation keyword clearing
+# ---------------------------------------------------------------------------
+
+
+class TestPlanConfirmationClearing:
+    def _make_workspace(self, tmp_path):
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        ws = WorkspaceManager(Settings(directories=dirs))
+        ws.create_project(name="confirm_test")
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_confirm_keyword_clears_plan_pending(self, tmp_path):
+        """Confirmation keyword in user prompt should delete .plan_pending."""
+        from aqualib.sdk.hooks import _make_prompt_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="conf-sess")
+        slug = meta["slug"]
+
+        pending_path = ws.session_dir(slug) / ".plan_pending"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("")
+
+        hook = _make_prompt_hook(ws, session_slug=slug)
+        await hook({"prompt": "approved, go ahead"}, None)
+
+        assert not pending_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_non_confirm_prompt_keeps_plan_pending(self, tmp_path):
+        """Non-confirmation prompts should not delete .plan_pending."""
+        from aqualib.sdk.hooks import _make_prompt_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="noconf-sess")
+        slug = meta["slug"]
+
+        pending_path = ws.session_dir(slug) / ".plan_pending"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("")
+
+        hook = _make_prompt_hook(ws, session_slug=slug)
+        await hook({"prompt": "what is the status?"}, None)
+
+        assert pending_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_chinese_confirm_keyword_clears_plan_pending(self, tmp_path):
+        """Chinese confirmation keywords should also clear .plan_pending."""
+        from aqualib.sdk.hooks import _make_prompt_hook
+
+        ws = self._make_workspace(tmp_path)
+        meta = ws.create_session(name="zh-conf-sess")
+        slug = meta["slug"]
+
+        pending_path = ws.session_dir(slug) / ".plan_pending"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("")
+
+        hook = _make_prompt_hook(ws, session_slug=slug)
+        await hook({"prompt": "好，执行"}, None)
+
+        assert not pending_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Vendor priority Gate 2
+# ---------------------------------------------------------------------------
+
+
+class TestVendorPriorityGate2:
+    def _make_workspace(self, tmp_path):
+        dirs = DirectorySettings(base=tmp_path).resolve()
+        ws = WorkspaceManager(Settings(directories=dirs))
+        ws.create_project(name="vp_test")
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_exec_tool_with_bioinformatics_command_gets_warning(self, tmp_path):
+        """Gate 2: exec tools with bioinformatics commands get a vendor priority warning."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            vendor_priority=True,
+        )
+        hook = _make_pre_tool_hook(settings, ws)
+
+        result = await hook(
+            {"toolName": "shell", "toolArgs": {"command": "bwa mem ref.fa reads.fq > out.sam"}},
+            None,
+        )
+
+        assert result["permissionDecision"] == "allow"
+        assert "VENDOR PRIORITY REMINDER" in result.get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_exec_tool_without_bioinformatics_command_no_warning(self, tmp_path):
+        """Gate 2: exec tools without bioinformatics keywords do not get a warning."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            vendor_priority=True,
+        )
+        hook = _make_pre_tool_hook(settings, ws)
+
+        result = await hook(
+            {"toolName": "shell", "toolArgs": {"command": "ls -la results/"}},
+            None,
+        )
+
+        assert result["permissionDecision"] == "allow"
+        assert "VENDOR PRIORITY REMINDER" not in result.get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_vendor_priority_off_no_warning(self, tmp_path):
+        """Gate 2 is inactive when vendor_priority=False."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            vendor_priority=False,
+        )
+        hook = _make_pre_tool_hook(settings, ws)
+
+        result = await hook(
+            {"toolName": "shell", "toolArgs": {"command": "samtools sort out.bam"}},
+            None,
+        )
+
+        assert result["permissionDecision"] == "allow"
+        assert "VENDOR PRIORITY REMINDER" not in result.get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_non_exec_tool_with_bioinformatics_no_warning(self, tmp_path):
+        """Gate 2 only activates for exec-style tools, not for arbitrary tools."""
+        from aqualib.sdk.hooks import _make_pre_tool_hook
+
+        ws = self._make_workspace(tmp_path)
+        settings = Settings(
+            directories=DirectorySettings(base=tmp_path).resolve(),
+            vendor_priority=True,
+        )
+        hook = _make_pre_tool_hook(settings, ws)
+
+        result = await hook(
+            {"toolName": "workspace_search", "toolArgs": {"query": "samtools sort"}},
+            None,
+        )
+
+        assert result["permissionDecision"] == "allow"
+        assert "VENDOR PRIORITY REMINDER" not in result.get("additionalContext", "")
+
+

@@ -19,13 +19,13 @@ if TYPE_CHECKING:
 _EXECUTOR_PROMPT = """\
 You are the **Executor**. The plan is in conversation history.
 
-Execute it. {vendor_priority} prefer vendor skills. Read docs (read_library_doc → \
-read_skill_doc) before first use of each skill. If a vendor call fails twice, \
-fall back to code honestly.
+Execute it. {vendor_priority} prefer vendor skills ({vendor_tools}). \
+Read docs (read_library_doc → read_skill_doc) before first use of each skill. \
+If a vendor call fails twice, fall back to code honestly.
 
 Outputs → `{session_results_dir}`
 
-Limits: max 20 tool calls. At 15, wrap up. Don't repeat Planner's work.
+Limits: max 25 tool calls. At 20, wrap up. Don't repeat Planner's work.
 
 When done: brief EXECUTION_REPORT (PRE_FLIGHT/STEPS_COMPLETED/TOTAL_VENDOR_CALLS/\
 ERRORS_ENCOUNTERED) then "Delegating to reviewer for audit."
@@ -60,6 +60,7 @@ def build_custom_agents(
     settings: "Settings",
     workspace: "WorkspaceManager | None" = None,
     session_slug: str | None = None,
+    skill_metas: "list | None" = None,
 ) -> list[dict]:
     """Return the Copilot SDK ``custom_agents`` list (executor + reviewer).
 
@@ -67,8 +68,25 @@ def build_custom_agents(
     role-specific memory (last 5 entries + recent executor vendor tool results)
     into the reviewer's prompt. The executor does NOT get memory injection
     because it shares conversation history with the Planner.
+
+    If *skill_metas* is provided (pre-scanned), it is used to build the
+    executor's explicit tool list so the sub-agent can see vendor_* tools.
     """
     vendor_priority_str = "ALWAYS" if settings.vendor_priority else "When appropriate,"
+
+    # Build vendor tool name list for executor prompt and tools list.
+    vendor_tool_names = [f"vendor_{m.name}" for m in (skill_metas or [])]
+    vendor_tools_display = ", ".join(vendor_tool_names) if vendor_tool_names else "none discovered"
+
+    # Executor gets an explicit tool list: all vendor tools + utility tools.
+    # tools: None would mean NO tools in the Copilot SDK; must be explicit.
+    executor_tool_names = [
+        *vendor_tool_names,
+        "workspace_search",
+        "read_library_doc",
+        "read_skill_doc",
+        "write_plan",
+    ]
 
     # Compute the session results directory path for the executor prompt.
     if workspace and session_slug:
@@ -135,12 +153,13 @@ def build_custom_agents(
                 "drug interaction analysis, data processing, and any scientific workflow. "
                 "Must be delegated to for any task that requires tool invocation."
             ),
-            "tools": None,  # all tools available
+            "tools": executor_tool_names,
             "prompt": _EXECUTOR_PROMPT.format(
                 vendor_priority=vendor_priority_str,
+                vendor_tools=vendor_tools_display,
                 session_results_dir=session_results_dir,
             ),
-            "infer": True,  # SDK auto-selects this agent based on context
+            "infer": False,  # delegation must be explicit from Planner
         },
         {
             "name": "reviewer",
@@ -149,7 +168,7 @@ def build_custom_agents(
                 "Audits the executor's work for correctness and vendor priority compliance. "
                 "Called after task execution to validate results."
             ),
-            "tools": ["grep", "glob", "view", "read_file", "workspace_search", "read_skill_doc"],
+            "tools": ["workspace_search", "read_skill_doc", "read_library_doc"],
             "prompt": _REVIEWER_PROMPT + reviewer_memory_ctx,
             "infer": False,  # only explicitly delegated by parent agent
         },

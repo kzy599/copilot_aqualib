@@ -145,7 +145,18 @@ def scan_all_skill_dirs(settings: "Settings", workspace: "WorkspaceManager") -> 
     repo_vendor = Path(__file__).resolve().parent.parent.parent.parent / "vendor"
     if repo_vendor.is_dir():
         for lib_dir in sorted(repo_vendor.iterdir()):
-            if lib_dir.is_dir() and any(lib_dir.rglob("SKILL.md")):
+            if not lib_dir.is_dir():
+                continue
+            # Detect empty directories (e.g. uninitialized git submodules)
+            contents = list(lib_dir.iterdir())
+            if not contents:
+                logger.warning(
+                    "Vendor library '%s' appears empty (git submodule not initialized?). "
+                    "Run: git submodule update --init --recursive",
+                    lib_dir.name,
+                )
+                continue
+            if any(lib_dir.rglob("SKILL.md")):
                 for meta in scan_skill_directory(lib_dir):
                     if meta.name not in seen:
                         meta.library_name = lib_dir.name

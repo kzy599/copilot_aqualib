@@ -28,6 +28,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAX_ADDITIONAL_CONTEXT_CHARS = 2000  # Hard cap for additionalContext injected at session start
+
+# Keywords that indicate the user has confirmed the plan and wants execution to proceed.
+_CONFIRMATION_KEYWORDS = frozenset({
+    "approved", "yes", "go ahead", "proceed", "confirm", "execute", "ok", "sure",
+    "好", "确认", "执行",
+})
+
+# Built-in exec-style tool names that bypass vendor skills (used for Gate 2 check).
+_EXEC_TOOL_NAMES = frozenset({"shell", "terminal", "run_command", "execute"})
+
+# Bioinformatics command keywords that vendor skills should handle.
+_BIOINFORMATICS_KEYWORDS = re.compile(
+    r"\b(blast|bwa|samtools|vcftools|plink|fastp|gatk|bcftools|fastqc|multiqc|"
+    r"picard|bowtie|minimap|hiblup|clawbio)\b",
+    re.IGNORECASE,
+)
 # ---------------------------------------------------------------------------
 
 
@@ -215,7 +231,7 @@ def _make_session_start_hook(workspace: "WorkspaceManager", skill_metas: "list |
 
 def _make_prompt_hook(workspace: "WorkspaceManager", session_slug: str | None = None):
     async def on_user_prompt_submitted(input_data: dict[str, Any], invocation: Any) -> None:
-        """Record the user prompt to context_log for project memory."""
+        """Record the user prompt to context_log and clear plan_pending on confirmation."""
         raw_ts = input_data.get("timestamp")
         if raw_ts is None:
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -237,7 +253,21 @@ def _make_prompt_hook(workspace: "WorkspaceManager", session_slug: str | None = 
         }
         if session_slug:
             entry["session_slug"] = session_slug
+
         workspace.append_audit_entry(entry)
+
+        # Gate: clear .plan_pending when user confirms the plan.
+        if session_slug:
+            prompt_text = (input_data.get("prompt", "") or "").lower()
+            if any(kw in prompt_text for kw in _CONFIRMATION_KEYWORDS):
+                pending_path = workspace.session_dir(session_slug) / ".plan_pending"
+                if pending_path.exists():
+                    try:
+                        pending_path.unlink()
+                        logger.info("Plan confirmed by user — cleared .plan_pending for %s", session_slug)
+                    except Exception:
+                        logger.debug("Could not remove .plan_pending", exc_info=True)
+
         return None  # do not modify the prompt
 
     return on_user_prompt_submitted
@@ -254,10 +284,16 @@ def _make_pre_tool_hook(
     async def on_pre_tool_use(
         input_data: dict[str, Any], invocation: Any
     ) -> dict[str, Any]:
-        """Tool call limit + audit record.
+        """Tool call limit + plan confirmation gate + vendor priority enforcement.
 
-        If the hard tool call limit is reached, block all further calls and
-        instruct the model to wrap up immediately.
+        Gate 1: If .plan_pending exists and a vendor_* tool is called, block until
+        the user explicitly confirms the plan.
+
+        Gate 2: If vendor_priority is True and a built-in exec tool is called with
+        a bioinformatics command, inject a warning reminding the agent to use
+        vendor_* tools instead.
+
+        Hard limit: block all further calls once the tool call ceiling is reached.
         """
         tool_name = input_data.get("toolName", "")
 
@@ -282,6 +318,43 @@ def _make_pre_tool_hook(
                     "Stop. Produce EXECUTION_REPORT now."
                 ),
             }
+
+        # Gate 1: block vendor_* tools when a plan is awaiting user confirmation.
+        if session_slug and tool_name.startswith("vendor_"):
+            pending_path = workspace.session_dir(session_slug) / ".plan_pending"
+            if pending_path.exists():
+                return {
+                    "permissionDecision": "block",
+                    "additionalContext": (
+                        "⏸️ Plan is awaiting user confirmation. "
+                        "Do NOT invoke vendor_* tools until the user explicitly confirms. "
+                        "Present the plan and wait."
+                    ),
+                }
+
+        # Gate 2: vendor priority warning when built-in exec tools run bioinformatics commands.
+        if (
+            settings.vendor_priority
+            and tool_name in _EXEC_TOOL_NAMES
+        ):
+            tool_args = input_data.get("toolArgs", {})
+            cmd = ""
+            if isinstance(tool_args, dict):
+                cmd = (
+                    tool_args.get("command", "")
+                    or tool_args.get("cmd", "")
+                    or tool_args.get("fullCommandText", "")
+                    or ""
+                )
+            if _BIOINFORMATICS_KEYWORDS.search(str(cmd)):
+                return {
+                    "permissionDecision": "allow",
+                    "additionalContext": (
+                        "⚠️ VENDOR PRIORITY REMINDER: A vendor_* tool may handle this "
+                        "bioinformatics command. Check available vendor skills via "
+                        "read_library_doc / read_skill_doc before using shell commands directly."
+                    ),
+                }
 
         return {"permissionDecision": "allow"}
 

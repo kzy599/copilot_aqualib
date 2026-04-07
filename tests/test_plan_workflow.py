@@ -242,3 +242,166 @@ class TestReviewerMemoryInjection:
         assert "EXECUTION_REPORT" in reviewer["prompt"]
         assert "previous verdicts" in reviewer["prompt"].lower()
 
+
+# ---------------------------------------------------------------------------
+# .plan_pending flag
+# ---------------------------------------------------------------------------
+
+
+class TestPlanPendingFlag:
+    def test_creates_plan_pending_flag(self, workspace: WorkspaceManager) -> None:
+        """write_plan should create .plan_pending in the session directory."""
+        from aqualib.skills.tool_adapter import _write_plan_to_session
+
+        meta = workspace.create_session(name="pending-sess")
+        slug = meta["slug"]
+
+        _write_plan_to_session(workspace, slug, "# Plan\n\nGoal: test")
+        pending_path = workspace.session_dir(slug) / ".plan_pending"
+
+        assert pending_path.exists()
+
+    def test_creates_plan_pending_fallback(self, workspace: WorkspaceManager) -> None:
+        """write_plan with no session_slug should create .plan_pending in workspace root."""
+        from aqualib.skills.tool_adapter import _write_plan_to_session
+
+        _write_plan_to_session(workspace, None, "# Fallback")
+        pending_path = workspace.dirs.base / ".plan_pending"
+
+        assert pending_path.exists()
+
+    def test_stop_instruction_in_result(self, workspace: WorkspaceManager) -> None:
+        """write_plan should return a hard-stop instruction."""
+        from aqualib.skills.tool_adapter import _write_plan_to_session
+
+        meta = workspace.create_session(name="stop-sess")
+        slug = meta["slug"]
+
+        result = _write_plan_to_session(workspace, slug, "# Plan")
+
+        assert "STOP HERE" in result
+        assert "confirmation" in result.lower()
+
+    def test_overwrites_plan_still_pending(self, workspace: WorkspaceManager) -> None:
+        """Re-writing the plan should keep .plan_pending set."""
+        from aqualib.skills.tool_adapter import _write_plan_to_session
+
+        meta = workspace.create_session(name="repend-sess")
+        slug = meta["slug"]
+
+        _write_plan_to_session(workspace, slug, "# Plan A")
+        _write_plan_to_session(workspace, slug, "# Plan B")
+
+        pending_path = workspace.session_dir(slug) / ".plan_pending"
+        assert pending_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Executor tools list
+# ---------------------------------------------------------------------------
+
+
+class TestExecutorToolsList:
+    def test_executor_tools_includes_utility_tools(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Executor tools list should include utility tools even with no vendor skills."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace, skill_metas=[])
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert "workspace_search" in executor["tools"]
+        assert "read_library_doc" in executor["tools"]
+        assert "read_skill_doc" in executor["tools"]
+        assert "write_plan" in executor["tools"]
+
+    def test_executor_tools_includes_vendor_tools(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Executor tools list should include all vendor tool names."""
+        from pathlib import Path
+
+        from aqualib.sdk.agents import build_custom_agents
+        from aqualib.skills.scanner import SkillMeta
+
+        meta1 = SkillMeta(
+            name="seq_align", description="Sequence alignment", tags=[],
+            version="1.0", parameters_schema={},
+            skill_dir=Path("/fake"), vendor_root=Path("/fake"),
+        )
+        meta2 = SkillMeta(
+            name="drug_check", description="Drug interaction", tags=[],
+            version="1.0", parameters_schema={},
+            skill_dir=Path("/fake"), vendor_root=Path("/fake"),
+        )
+
+        agents = build_custom_agents(settings, workspace, skill_metas=[meta1, meta2])
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert "vendor_seq_align" in executor["tools"]
+        assert "vendor_drug_check" in executor["tools"]
+
+    def test_executor_infer_is_false(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Executor must have infer=False so delegation is always explicit."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        executor = next(a for a in agents if a["name"] == "executor")
+
+        assert executor.get("infer") is False
+
+    def test_reviewer_tools_no_nonexistent_names(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer tools must not include non-existent SDK tool names."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        for invalid in ("grep", "glob", "view", "read_file"):
+            assert invalid not in reviewer["tools"]
+
+    def test_reviewer_tools_contains_read_library_doc(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """Reviewer tools must include read_library_doc."""
+        from aqualib.sdk.agents import build_custom_agents
+
+        agents = build_custom_agents(settings, workspace)
+        reviewer = next(a for a in agents if a["name"] == "reviewer")
+
+        assert "read_library_doc" in reviewer["tools"]
+
+
+# ---------------------------------------------------------------------------
+# Planner delegation enforcement (system prompt)
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerDelegation:
+    def test_guidelines_forbid_direct_execution(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """System prompt guidelines must explicitly forbid Planner from executing."""
+        from aqualib.sdk.system_prompt import build_system_message
+
+        msg = build_system_message(settings, workspace)
+        guidelines = msg["sections"]["guidelines"]["content"]
+
+        assert "DO NOT" in guidelines
+        assert "Executor" in guidelines
+
+    def test_guidelines_require_user_confirmation(
+        self, settings: Settings, workspace: WorkspaceManager
+    ) -> None:
+        """System prompt must tell Planner to wait for user confirmation."""
+        from aqualib.sdk.system_prompt import build_system_message
+
+        msg = build_system_message(settings, workspace)
+        guidelines = msg["sections"]["guidelines"]["content"]
+
+        assert "confirmation" in guidelines.lower() or "confirm" in guidelines.lower()

@@ -361,18 +361,30 @@ def _write_plan_to_session(
     session_slug: str | None,
     plan_content: str,
 ) -> str:
-    """Write plan.md to the session directory. Returns the file path for reference."""
+    """Write plan.md to the session directory and set a pending-confirmation flag.
+
+    Returns a hard-stop instruction so the agent presents the plan to the user
+    and waits for explicit confirmation before execution proceeds.
+    """
     if not session_slug:
         # Fallback: write to workspace root if no session
         plan_path = workspace.dirs.base / "plan.md"
+        pending_path = workspace.dirs.base / ".plan_pending"
     else:
         plan_dir = workspace.session_dir(session_slug)
         plan_dir.mkdir(parents=True, exist_ok=True)
         plan_path = plan_dir / "plan.md"
+        pending_path = plan_dir / ".plan_pending"
 
     plan_path.write_text(plan_content, encoding="utf-8")
-    logger.info("Plan written → %s", plan_path)
-    return f"Plan saved to {plan_path}. Executor and reviewer will read this file."
+    pending_path.write_text("", encoding="utf-8")
+    logger.info("Plan written → %s (pending confirmation)", plan_path)
+    return (
+        f"Plan saved to {plan_path}.\n\n"
+        "⏸️ STOP HERE. Present this plan to the user and wait for explicit confirmation "
+        "before delegating to Executor. Do NOT invoke any vendor_* or execution tools "
+        "until the user confirms."
+    )
 
 
 # ---------------------------------------------------------------------------
