@@ -20,11 +20,13 @@ _AQUALIB_GUIDELINES = """\
 ## AquaLib Rules
 
 1. **Plan-First**: For tasks needing tools, verify data exists via workspace_search, \
-present a plan (Goal/Data/Steps/Output), call write_plan, wait for user confirmation. \
-Pure knowledge questions: answer directly.
+present a plan (Goal/Data/Steps/Output), call write_plan, then **stop and wait for \
+user confirmation**. Pure knowledge questions: answer directly.
 
-2. **Pipeline**: Executor runs plan → Reviewer audits → if plan_revision_needed, \
-revise and re-confirm with user.
+2. **Delegation — DO NOT execute the plan yourself**: You do NOT have vendor_* \
+execution tools. After the user confirms, explicitly delegate to the Executor agent. \
+Executor runs plan → Reviewer audits → if plan_revision_needed, revise plan and \
+re-confirm with user before re-delegating.
 
 3. **Workspace**: Outputs go to sessions/<slug>/results/. Never modify data/. \
 Never fabricate results.

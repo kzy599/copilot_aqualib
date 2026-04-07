@@ -325,3 +325,40 @@ def test_scan_all_skill_dirs_deduplicates(tmp_path: Path):
     metas = scan_all_skill_dirs(settings, workspace)
     names = [m.name for m in metas]
     assert len(names) == len(set(names)), "scan_all_skill_dirs should return unique skill names"
+
+
+def test_scan_all_skill_dirs_warns_empty_submodule(tmp_path: Path, caplog):
+    """scan_all_skill_dirs should warn about empty (uninitialized) submodule directories."""
+    import logging
+    from unittest.mock import patch
+
+    import aqualib.skills.scanner as scanner_mod
+    from aqualib.skills.scanner import scan_all_skill_dirs
+
+    # Create an empty vendor library directory (simulates uninitialized git submodule).
+    # scan_all_skill_dirs computes:
+    #   repo_vendor = Path(__file__).resolve().parent.parent.parent.parent / "vendor"
+    # So with __file__ at tmp_path/a/b/c/scanner.py, repo_vendor = tmp_path / "vendor".
+    fake_vendor = tmp_path / "vendor"
+    empty_lib = fake_vendor / "EmptyLib"
+    empty_lib.mkdir(parents=True)
+
+    ws_base = tmp_path / "workspace"
+    ws_base.mkdir()
+    dirs = DirectorySettings(base=ws_base).resolve()
+    settings = Settings(directories=dirs)
+    workspace = WorkspaceManager(settings)
+
+    fake_file = str(tmp_path / "a" / "b" / "c" / "scanner.py")
+
+    with patch.object(scanner_mod, "__file__", fake_file):
+        with caplog.at_level(logging.WARNING, logger="aqualib.skills.scanner"):
+            scan_all_skill_dirs(settings, workspace)
+
+    warnings_found = [
+        r for r in caplog.records
+        if "empty" in r.message.lower() or "not initialized" in r.message.lower()
+    ]
+    assert warnings_found, "Expected a warning about empty vendor library directory"
+
+

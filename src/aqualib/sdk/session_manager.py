@@ -116,7 +116,7 @@ class SessionManager:
             streaming=s.streaming,
             provider=self._build_provider(),
             skill_directories=self._collect_skill_dirs(),
-            custom_agents=build_custom_agents(self.settings, self.workspace, slug),
+            custom_agents=build_custom_agents(self.settings, self.workspace, slug, skill_metas=skill_metas),
             tools=build_tools_from_skills(
                 self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
             ),
@@ -158,7 +158,7 @@ class SessionManager:
                 self.settings, self.workspace, session_slug=slug, skill_metas=skill_metas
             ),
             skill_directories=self._collect_skill_dirs(),
-            custom_agents=build_custom_agents(self.settings, self.workspace, slug),
+            custom_agents=build_custom_agents(self.settings, self.workspace, slug, skill_metas=skill_metas),
             system_message=build_system_message(self.settings, self.workspace),
             hooks=build_hooks(self.settings, self.workspace, slug, skill_metas=skill_metas),
             model=s.model,
