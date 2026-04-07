@@ -38,7 +38,9 @@ _CONFIRMATION_KEYWORDS = frozenset({
 # Built-in exec-style tool names that bypass vendor skills (used for Gate 2 check).
 _EXEC_TOOL_NAMES = frozenset({"shell", "terminal", "run_command", "execute"})
 
-# Bioinformatics command keywords that vendor skills should handle.
+# Bioinformatics command keywords that vendor skills should handle instead of raw exec tools.
+# When an exec tool is called with a command containing any of these, Gate 2 injects a
+# vendor-priority reminder. Add new keywords here as vendor skill coverage grows.
 _BIOINFORMATICS_KEYWORDS = re.compile(
     r"\b(blast|bwa|samtools|vcftools|plink|fastp|gatk|bcftools|fastqc|multiqc|"
     r"picard|bowtie|minimap|hiblup|clawbio)\b",
